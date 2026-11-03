@@ -403,27 +403,41 @@ def session_vwap(df: pd.DataFrame) -> float:
     return float((typical * vol).sum() / total) if total > 0 else float("nan")
 
 
-def evaluate_symbol(symbol: str, source: pd.DataFrame, daily: Dict[str, Any], now: datetime) -> Optional[Dict[str, Any]]:
+def evaluate_symbol(symbol: str, source: pd.DataFrame, daily: Dict[str, Any], now: datetime,
+                    diagnostic: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
     if source.empty:
+        if diagnostic is not None:
+            diagnostic["rejected"] = "no_candles"
         return None
     df = normalize_intraday(source)
     df = completed_bars(df, now)
     if len(df) < CFG["MIN_HISTORY_BARS"]:
+        if diagnostic is not None:
+            diagnostic["rejected"] = "insufficient_history"
         return None
     last_idx = df.index[-1]
     age = (pd.Timestamp(now).tz_convert(TZ) - last_idx).total_seconds() / 60.0
     if age < 5 or age > CFG["MAX_BAR_AGE_MIN"] + 5:
+        if diagnostic is not None:
+            diagnostic["rejected"] = "stale_candle"
         return None
 
     last = df.iloc[-1]
     price = float(last["close"])
     if price < CFG["PRICE_FLOOR"]:
+        if diagnostic is not None:
+            diagnostic["rejected"] = "price_floor"
         return None
 
     # Same clock-time volume comparison across the previous five sessions.
     relvol, slot_sessions = same_slot_relative_volume(df, last_idx, CFG["MIN_TIME_SLOT_SESSIONS"])
     cumulative_relvol, cumulative_sessions = session_cumulative_relative_volume(df, last_idx, CFG["MIN_TIME_SLOT_SESSIONS"])
+    if diagnostic is not None:
+        diagnostic["volume"] = {"same_slot": round(relvol, 3), "cumulative": round(cumulative_relvol, 3),
+                                "sessions": min(slot_sessions, cumulative_sessions)}
     if relvol < CFG["MIN_RELATIVE_VOLUME"] or cumulative_relvol < 1.25:
+        if diagnostic is not None:
+            diagnostic["rejected"] = "relative_volume"
         return None
 
     closes = df["close"].astype(float).values
@@ -433,10 +447,14 @@ def evaluate_symbol(symbol: str, source: pd.DataFrame, daily: Dict[str, Any], no
     atr_value = atr(df, 14)
     vwap_value = session_vwap(df)
     if not np.isfinite([fast, slow, rsi_value, atr_value, vwap_value]).all() or atr_value <= 0:
+        if diagnostic is not None:
+            diagnostic["rejected"] = "indicator_invalid"
         return None
 
     prev = df.iloc[-(CFG["BREAKOUT_LOOKBACK"] + 1):-1]
     if len(prev) < CFG["BREAKOUT_LOOKBACK"]:
+        if diagnostic is not None:
+            diagnostic["rejected"] = "breakout_history"
         return None
     prior_high = float(prev["high"].max())
     prior_low = float(prev["low"].min())
@@ -447,6 +465,8 @@ def evaluate_symbol(symbol: str, source: pd.DataFrame, daily: Dict[str, Any], no
     day_open = float(day_candles.iloc[0]["open"]) if not day_candles.empty else price
     day_move = ((price / day_open) - 1.0) * 100.0 if day_open else 0.0
     if abs(day_move) > CFG["MAX_DAY_MOVE_PCT"]:
+        if diagnostic is not None:
+            diagnostic["rejected"] = "day_move"
         return None
 
     bar_range = max(float(last["high"] - last["low"]), 1e-9)
@@ -473,7 +493,20 @@ def evaluate_symbol(symbol: str, source: pd.DataFrame, daily: Dict[str, Any], no
         if extension <= CFG["MAX_EXTENSION_ATR"]:
             side, breakout_level = "SELL", prior_low
 
+    if diagnostic is not None:
+        diagnostic["conditions"] = {
+            "daily_trend_buy": bool(daily_up), "daily_trend_sell": bool(daily_down),
+            "ema_buy": bool(fast > slow), "ema_sell": bool(fast < slow),
+            "vwap_buy": bool(above_vwap), "vwap_sell": bool(below_vwap),
+            "breakout_buy": bool(breakout), "breakout_sell": bool(breakdown),
+            "candle_buy": bool(bullish_candle), "candle_sell": bool(bearish_candle),
+            "rsi_buy": bool(CFG["MIN_RSI_BUY"] <= rsi_value <= CFG["MAX_RSI_BUY"]),
+            "rsi_sell": bool(CFG["MIN_RSI_SELL"] <= rsi_value <= CFG["MAX_RSI_SELL"]),
+        }
+        diagnostic["volume"] = {"same_slot": round(relvol, 3), "cumulative": round(cumulative_relvol, 3)}
     if not side:
+        if diagnostic is not None:
+            diagnostic["rejected"] = "technical_alignment"
         return None
 
     risk = CFG["STOP_ATR_MULTIPLE"] * atr_value
@@ -481,6 +514,8 @@ def evaluate_symbol(symbol: str, source: pd.DataFrame, daily: Dict[str, Any], no
     target = price + risk * CFG["TARGET_R_MULTIPLE"] if side == "BUY" else price - risk * CFG["TARGET_R_MULTIPLE"]
     reward_risk = abs(target - price) / max(abs(price - stop), 1e-9)
     if reward_risk < 2.0:
+        if diagnostic is not None:
+            diagnostic["rejected"] = "risk_reward"
         return None
 
     # Transparent ranking score, not a predicted probability.
@@ -518,7 +553,8 @@ def evaluate_symbol(symbol: str, source: pd.DataFrame, daily: Dict[str, Any], no
     }
 
 
-def kronos_forecast(symbol: str, raw_df: pd.DataFrame, side: str, as_of: Optional[datetime] = None) -> Dict[str, Any]:
+def kronos_forecast(symbol: str, raw_df: pd.DataFrame, side: str,
+                    as_of: Optional[datetime] = None) -> Dict[str, Any]:
     if kronos_predictor is None:
         raise RuntimeError("Kronos model is not ready: " + kronos_status)
     df = normalize_intraday(raw_df)
@@ -708,109 +744,155 @@ def run_scan_cycle() -> Dict[str, Any]:
 
 
 
-def run_dry_run() -> Dict[str, Any]:
-    """Historical snapshot diagnostic. Never sends Telegram or modifies signal state.
+def run_dry_run_v2() -> Dict[str, Any]:
+    """Historical full-session diagnostic. No Telegram, orders or signal DB writes.
 
-    Uses the latest common completed NSE session available from Yahoo. This is NOT
-    a point-in-time backtest: the cached daily universe/trend may contain later data.
+    Daily trend and universe use current cache, so this is NOT a look-ahead-free
+    backtest. Forecasts are exploratory and do not represent win probabilities.
     """
-    started = time.time()
+    from collections import Counter
+    started = time.monotonic()
     if not UNIVERSE_CACHE.exists():
-        raise RuntimeError("No universe cache; run refresh-universe first.")
+        raise RuntimeError("Missing data/liquid_universe.json. Run refresh-universe first.")
     universe = json.loads(UNIVERSE_CACHE.read_text())
     entries = universe.get("scan_symbols", [])
     if not entries:
-        raise RuntimeError("Universe cache contains no symbols.")
+        raise RuntimeError("Universe cache has no scan symbols")
 
-    symbols = [e["symbol"] for e in entries]
     frames = {}
-    for start in range(0, len(symbols), CFG["INTRADAY_BATCH_SIZE"]):
-        group = symbols[start:start + CFG["INTRADAY_BATCH_SIZE"]]
+    for offset in range(0, len(entries), CFG["INTRADAY_BATCH_SIZE"]):
+        group = [e["symbol"] for e in entries[offset:offset + CFG["INTRADAY_BATCH_SIZE"]]]
         frames.update(download_batch(group, CFG["INTRADAY_PERIOD"], CFG["BAR_INTERVAL"]))
-        time.sleep(0.10)
+        LOG.info("DRY RUN V2 downloaded %s/%s symbols", min(offset + len(group), len(entries)), len(entries))
 
-    # Select the most recent NSE session with data. Use a shared timestamp so
-    # delayed/missing symbols are not evaluated against different sessions.
-    latest = []
-    for frame in frames.values():
-        if frame is not None and not frame.empty:
-            f = normalize_intraday(frame)
-            f = f.between_time("09:15", "15:25")
-            if not f.empty:
-                latest.append(f.index[-1])
-    if not latest:
-        raise RuntimeError("No intraday bars were downloaded; cannot perform dry run.")
-
-    session_date = max(latest).date()
-    session_frames = {}
-    for sym, frame in frames.items():
+    normalized = {}
+    latest_sessions = []
+    for symbol, frame in frames.items():
         if frame is None or frame.empty:
             continue
-        f = normalize_intraday(frame)
-        f = f[[x.date() <= session_date for x in f.index]]
-        session_frames[sym] = f
-
-    # The last fully closed five-minute candle at/before 15:25 on selected day.
-    anchor = datetime.combine(session_date, dtime(15, 30), tzinfo=TZ)
-    results = []
-    no_data = 0
-    stale = 0
+        clean = normalize_intraday(frame)
+        clean = clean.between_time("09:15", "15:25")
+        if clean.empty:
+            continue
+        normalized[symbol] = clean
+        latest_sessions.append(clean.index[-1].date())
+    if not latest_sessions:
+        raise RuntimeError("Yahoo returned no usable NSE 5-minute candles")
+    replay_day = max(latest_sessions)
+    # A market-open day may have incomplete candles; replay only completed bars.
+    actual_now = datetime.now(TZ)
+    end = datetime.combine(replay_day, dtime(15, 30), tzinfo=TZ)
+    if replay_day == actual_now.date():
+        end = min(end, actual_now)
+    rejection = Counter()
+    conditions_failed = Counter()
+    candidates = []
+    total_checks = 0
+    symbols_with_session = 0
+    replayed_bars = 0
     for entry in entries:
-        sym = entry["symbol"]
-        frame = session_frames.get(sym)
-        if frame is None or frame.empty:
-            no_data += 1
+        symbol = entry["symbol"]
+        frame = normalized.get(symbol)
+        if frame is None:
+            rejection["missing_intraday_data"] += 1
             continue
-        usable = completed_bars(frame, anchor)
-        if usable.empty or usable.index[-1].date() != session_date:
-            stale += 1
+        # Exclude any bars from future sessions; use only history available as of each replay.
+        today = frame[[x.date() == replay_day for x in frame.index]]
+        if today.empty:
+            rejection["missing_replay_session"] += 1
             continue
-        signal = evaluate_symbol(sym, frame, entry, anchor)
-        if signal:
-            results.append((signal["score"], signal, frame))
+        symbols_with_session += 1
+        for candle_start in today.index:
+            anchor = candle_start.to_pydatetime() + timedelta(minutes=5)
+            if anchor > end:
+                continue
+            total_checks += 1
+            replayed_bars += 1
+            # Do not allow the evaluation function to inspect later bars.
+            prefix = frame.loc[frame.index <= candle_start]
+            diag = {}
+            signal = evaluate_symbol(symbol, prefix, entry, anchor, diagnostic=diag)
+            if signal:
+                candidates.append((signal["score"], signal, prefix, anchor))
+                rejection["technical_pass"] += 1
+            else:
+                rejection[diag.get("rejected", "unknown")] += 1
+            if diag.get("rejected") == "technical_alignment":
+                flags = diag.get("conditions", {})
+                for key, passed in flags.items():
+                    if not passed:
+                        conditions_failed[key] += 1
+    candidates.sort(key=lambda item: (-item[0], item[1]["candle_time"], item[1]["symbol"]))
+    # Diagnostic only: always test one actual Kronos inference on a recent stock
+    # even if there are zero technical candidates.
+    independent = {"status": "not_run"}
+    eligible = []
+    for entry in entries:
+        f = normalized.get(entry["symbol"])
+        if f is not None and len(completed_bars(f.loc[f.index.date <= replay_day], end)) >= 40:
+            eligible.append((entry["symbol"], f))
+    if eligible:
+        sym, frame = eligible[0]
+        try:
+            pred = kronos_forecast(sym, frame, "BUY", as_of=end)
+            independent = {"status": "success", "symbol": sym, "forecast": pred}
+        except Exception as exc:
+            independent = {"status": "failed", "symbol": sym, "error": str(exc)[:350]}
+            LOG.exception("DRY RUN V2 independent Kronos inference failed")
+    else:
+        independent = {"status": "no_sufficient_history"}
 
-    results.sort(key=lambda x: x[0], reverse=True)
-    selected = results[:CFG["MAX_SIGNALS_PER_CYCLE"]]
-    kronos_rejected = 0
-    kronos_errors = 0
-    qualifying = []
-    for _, signal, frame in selected:
-        if CFG["KRONOS_ENABLED"]:
-            try:
-                signal["forecast"] = kronos_forecast(signal["symbol"], frame, signal["side"], as_of=anchor)
-                if CFG["KRONOS_REQUIRED"] and not signal["forecast"]["direction_aligned"]:
-                    kronos_rejected += 1
-                    continue
-            except Exception as exc:
-                kronos_errors += 1
-                LOG.warning("DRY RUN Kronos error %s: %s", signal["symbol"], exc)
-                if CFG["KRONOS_REQUIRED"]:
-                    continue
-        qualifying.append(signal)
+    # Only the top technical candidates are tested through Kronos, matching
+    # live per-cycle selection size; no Telegram or DB changes.
+    forecast_samples = []
+    for _, signal, prefix, anchor in candidates[:CFG["MAX_SIGNALS_PER_CYCLE"]]:
+        item = dict(signal)
+        try:
+            item["forecast"] = kronos_forecast(signal["symbol"], prefix, signal["side"], as_of=anchor)
+        except Exception as exc:
+            item["forecast"] = {"status": "error", "detail": str(exc)[:250]}
+        forecast_samples.append(item)
 
     report = {
-        "mode": "DRY_RUN_NO_ALERTS",
-        "historical_session": str(session_date),
-        "evaluation_at_ist": anchor.isoformat(),
-        "symbols_requested": len(symbols),
-        "symbols_with_data": len(session_frames),
-        "missing_data": no_data,
-        "missing_selected_session": stale,
-        "technical_candidates": len(results),
-        "kronos_rejected": kronos_rejected,
-        "kronos_errors": kronos_errors,
-        "hypothetical_signals": qualifying,
-        "duration_seconds": round(time.time() - started, 1),
-        "warning": "Diagnostic snapshot only; NOT a valid point-in-time backtest. Daily EMA/universe cache may include future data relative to the selected session. Yahoo Finance data is unofficial. No Telegram messages, orders or signal DB writes.",
+        "mode": "DRY_RUN_V2_NO_ALERTS", "session_date_ist": str(replay_day),
+        "symbols_requested": len(entries), "symbols_with_data": len(normalized),
+        "symbols_with_replay_session": symbols_with_session,
+        "candles_evaluated": replayed_bars, "checks_total": total_checks,
+        "primary_rejection_counts": dict(rejection.most_common()),
+        "alignment_condition_failures": dict(conditions_failed.most_common()),
+        "technical_candidates": len(candidates),
+        "top_technical_candidates": [x[1] for x in candidates[:10]],
+        "kronos_independent_test": independent,
+        "kronos_candidate_forecasts": forecast_samples,
+        "elapsed_seconds": round(time.monotonic() - started, 2),
+        "caveats": [
+            "Not a point-in-time backtest: cached universe and daily EMA values may look ahead.",
+            "Replays only the most recent available trading session; no P&L/win-rate estimate.",
+            "Yahoo Finance intraday data is unofficial and may have gaps or delays.",
+            "No Telegram messages, signal database writes, trades or scheduled activation.",
+        ],
     }
-    LOG.info("DRY RUN REPORT %s", json.dumps(report, default=str))
+    path = ROOT / "dry_run_v2_report.json"
+    path.write_text(json.dumps(report, indent=2, default=str), encoding="utf-8")
+    LOG.info("DRY RUN V2 SUMMARY %s", json.dumps({k: v for k, v in report.items()
+             if k in ("session_date_ist", "symbols_requested", "symbols_with_replay_session",
+                      "candles_evaluated", "primary_rejection_counts", "alignment_condition_failures",
+                      "technical_candidates", "kronos_independent_test", "elapsed_seconds")}, default=str))
+    LOG.info("DRY RUN V2 report saved: %s", path)
+    if independent["status"] != "success":
+        raise RuntimeError("Independent Kronos inference did not pass; see report and log")
     return report
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Bharat Intraday Scout 2.0 one-shot runner")
-    parser.add_argument("--task", choices=["scan", "refresh-universe", "test-telegram", "test-kronos", "dry-run"], default="scan")
+    parser.add_argument("--task", choices=["scan", "refresh-universe", "test-telegram", "test-kronos", "dry-run-v2"], default="scan")
     args = parser.parse_args()
+    if args.task == "dry-run-v2":
+        load_kronos()
+        run_dry_run_v2()
+        return 0
+
     init_db()
 
     if args.task == "refresh-universe":
@@ -829,11 +911,6 @@ def main() -> int:
         if kronos_predictor is None:
             raise RuntimeError("Kronos failed to load: " + kronos_status)
         LOG.info("Kronos self-test succeeded: %s", kronos_status)
-        return 0
-
-    if args.task == "dry-run":
-        load_kronos()
-        run_dry_run()
         return 0
 
     if not is_market_session():

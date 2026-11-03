@@ -33,7 +33,7 @@ jobs:
   run-scanner:
     # Manual setup/test runs always work; timed schedules stay disabled until
     # the owner explicitly sets the repository variable BIS_SCANNER_ENABLED=true.
-    if: github.event_name != 'schedule' || vars.BIS_SCANNER_ENABLED = false
+    if: github.event_name != 'schedule' || vars.BIS_SCANNER_ENABLED = true
     runs-on: ubuntu-latest
     timeout-minutes: 8
     env:

@@ -20,6 +20,7 @@ on:
           - test-kronos
           - refresh-universe
           - scan
+          - dry-run
 
 # Do not allow two runs to mutate the same SQLite state at once.
 concurrency:
@@ -93,7 +94,7 @@ jobs:
           .venv/bin/python -m pip install -r requirements.txt
 
       - name: Restore Kronos model cache
-        if: steps.task.outputs.name == 'scan' || steps.task.outputs.name == 'test-kronos'
+        if: steps.task.outputs.name == 'scan' || steps.task.outputs.name == 'test-kronos' || steps.task.outputs.name == 'dry-run'
         id: hf-cache
         uses: actions/cache@v4
         with:
@@ -101,7 +102,7 @@ jobs:
           key: bis20-hf-kronos-mini-tokenizer2k-v1
 
       - name: Clone official Kronos source
-        if: steps.task.outputs.name == 'scan' || steps.task.outputs.name == 'test-kronos'
+        if: steps.task.outputs.name == 'scan' || steps.task.outputs.name == 'test-kronos' || steps.task.outputs.name == 'dry-run'
         run: git clone --depth 1 https://github.com/shiyu-coder/Kronos.git vendor/Kronos
 
       - name: Run Bharat Intraday Scout
@@ -110,7 +111,7 @@ jobs:
         run: .venv/bin/python scanner.py --task "$TASK_NAME"
 
       - name: Commit scanner state and universe cache
-        if: success()
+        if: success() && steps.task.outputs.name != 'dry-run'
         shell: bash
         run: |
           git config user.name "github-actions[bot]"

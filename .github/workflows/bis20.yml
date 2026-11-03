@@ -20,7 +20,7 @@ on:
           - test-kronos
           - refresh-universe
           - scan
-          - dry-run
+          - dry-run-v2
 
 # Do not allow two runs to mutate the same SQLite state at once.
 concurrency:
@@ -94,7 +94,7 @@ jobs:
           .venv/bin/python -m pip install -r requirements.txt
 
       - name: Restore Kronos model cache
-        if: steps.task.outputs.name == 'scan' || steps.task.outputs.name == 'test-kronos' || steps.task.outputs.name == 'dry-run'
+        if: steps.task.outputs.name == 'scan' || steps.task.outputs.name == 'test-kronos' || steps.task.outputs.name == 'dry-run-v2'
         id: hf-cache
         uses: actions/cache@v4
         with:
@@ -102,7 +102,7 @@ jobs:
           key: bis20-hf-kronos-mini-tokenizer2k-v1
 
       - name: Clone official Kronos source
-        if: steps.task.outputs.name == 'scan' || steps.task.outputs.name == 'test-kronos' || steps.task.outputs.name == 'dry-run'
+        if: steps.task.outputs.name == 'scan' || steps.task.outputs.name == 'test-kronos' || steps.task.outputs.name == 'dry-run-v2'
         run: git clone --depth 1 https://github.com/shiyu-coder/Kronos.git vendor/Kronos
 
       - name: Run Bharat Intraday Scout
@@ -110,8 +110,17 @@ jobs:
           TASK_NAME: ${{ steps.task.outputs.name }}
         run: .venv/bin/python scanner.py --task "$TASK_NAME"
 
+      - name: Upload dry-run V2 diagnostic report
+        if: always() && steps.task.outputs.name == 'dry-run-v2'
+        uses: actions/upload-artifact@v4
+        with:
+          name: bis20-dry-run-v2-report
+          path: dry_run_v2_report.json
+          if-no-files-found: warn
+          retention-days: 7
+
       - name: Commit scanner state and universe cache
-        if: success() && steps.task.outputs.name != 'dry-run'
+        if: success() && steps.task.outputs.name != 'dry-run-v2'
         shell: bash
         run: |
           git config user.name "github-actions[bot]"

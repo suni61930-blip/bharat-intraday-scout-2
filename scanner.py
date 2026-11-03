@@ -518,11 +518,11 @@ def evaluate_symbol(symbol: str, source: pd.DataFrame, daily: Dict[str, Any], no
     }
 
 
-def kronos_forecast(symbol: str, raw_df: pd.DataFrame, side: str) -> Dict[str, Any]:
+def kronos_forecast(symbol: str, raw_df: pd.DataFrame, side: str, as_of: Optional[datetime] = None) -> Dict[str, Any]:
     if kronos_predictor is None:
         raise RuntimeError("Kronos model is not ready: " + kronos_status)
     df = normalize_intraday(raw_df)
-    df = completed_bars(df, datetime.now(TZ)).tail(CFG["KRONOS_LOOKBACK"])
+    df = completed_bars(df, as_of or datetime.now(TZ)).tail(CFG["KRONOS_LOOKBACK"])
     if len(df) < 40:
         raise RuntimeError("Not enough completed candles for Kronos")
 
@@ -707,9 +707,109 @@ def run_scan_cycle() -> Dict[str, Any]:
     return summary
 
 
+
+def run_dry_run() -> Dict[str, Any]:
+    """Historical snapshot diagnostic. Never sends Telegram or modifies signal state.
+
+    Uses the latest common completed NSE session available from Yahoo. This is NOT
+    a point-in-time backtest: the cached daily universe/trend may contain later data.
+    """
+    started = time.time()
+    if not UNIVERSE_CACHE.exists():
+        raise RuntimeError("No universe cache; run refresh-universe first.")
+    universe = json.loads(UNIVERSE_CACHE.read_text())
+    entries = universe.get("scan_symbols", [])
+    if not entries:
+        raise RuntimeError("Universe cache contains no symbols.")
+
+    symbols = [e["symbol"] for e in entries]
+    frames = {}
+    for start in range(0, len(symbols), CFG["INTRADAY_BATCH_SIZE"]):
+        group = symbols[start:start + CFG["INTRADAY_BATCH_SIZE"]]
+        frames.update(download_batch(group, CFG["INTRADAY_PERIOD"], CFG["BAR_INTERVAL"]))
+        time.sleep(0.10)
+
+    # Select the most recent NSE session with data. Use a shared timestamp so
+    # delayed/missing symbols are not evaluated against different sessions.
+    latest = []
+    for frame in frames.values():
+        if frame is not None and not frame.empty:
+            f = normalize_intraday(frame)
+            f = f.between_time("09:15", "15:25")
+            if not f.empty:
+                latest.append(f.index[-1])
+    if not latest:
+        raise RuntimeError("No intraday bars were downloaded; cannot perform dry run.")
+
+    session_date = max(latest).date()
+    session_frames = {}
+    for sym, frame in frames.items():
+        if frame is None or frame.empty:
+            continue
+        f = normalize_intraday(frame)
+        f = f[[x.date() <= session_date for x in f.index]]
+        session_frames[sym] = f
+
+    # The last fully closed five-minute candle at/before 15:25 on selected day.
+    anchor = datetime.combine(session_date, dtime(15, 30), tzinfo=TZ)
+    results = []
+    no_data = 0
+    stale = 0
+    for entry in entries:
+        sym = entry["symbol"]
+        frame = session_frames.get(sym)
+        if frame is None or frame.empty:
+            no_data += 1
+            continue
+        usable = completed_bars(frame, anchor)
+        if usable.empty or usable.index[-1].date() != session_date:
+            stale += 1
+            continue
+        signal = evaluate_symbol(sym, frame, entry, anchor)
+        if signal:
+            results.append((signal["score"], signal, frame))
+
+    results.sort(key=lambda x: x[0], reverse=True)
+    selected = results[:CFG["MAX_SIGNALS_PER_CYCLE"]]
+    kronos_rejected = 0
+    kronos_errors = 0
+    qualifying = []
+    for _, signal, frame in selected:
+        if CFG["KRONOS_ENABLED"]:
+            try:
+                signal["forecast"] = kronos_forecast(signal["symbol"], frame, signal["side"], as_of=anchor)
+                if CFG["KRONOS_REQUIRED"] and not signal["forecast"]["direction_aligned"]:
+                    kronos_rejected += 1
+                    continue
+            except Exception as exc:
+                kronos_errors += 1
+                LOG.warning("DRY RUN Kronos error %s: %s", signal["symbol"], exc)
+                if CFG["KRONOS_REQUIRED"]:
+                    continue
+        qualifying.append(signal)
+
+    report = {
+        "mode": "DRY_RUN_NO_ALERTS",
+        "historical_session": str(session_date),
+        "evaluation_at_ist": anchor.isoformat(),
+        "symbols_requested": len(symbols),
+        "symbols_with_data": len(session_frames),
+        "missing_data": no_data,
+        "missing_selected_session": stale,
+        "technical_candidates": len(results),
+        "kronos_rejected": kronos_rejected,
+        "kronos_errors": kronos_errors,
+        "hypothetical_signals": qualifying,
+        "duration_seconds": round(time.time() - started, 1),
+        "warning": "Diagnostic snapshot only; NOT a valid point-in-time backtest. Daily EMA/universe cache may include future data relative to the selected session. Yahoo Finance data is unofficial. No Telegram messages, orders or signal DB writes.",
+    }
+    LOG.info("DRY RUN REPORT %s", json.dumps(report, default=str))
+    return report
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Bharat Intraday Scout 2.0 one-shot runner")
-    parser.add_argument("--task", choices=["scan", "refresh-universe", "test-telegram", "test-kronos"], default="scan")
+    parser.add_argument("--task", choices=["scan", "refresh-universe", "test-telegram", "test-kronos", "dry-run"], default="scan")
     args = parser.parse_args()
     init_db()
 
@@ -729,6 +829,11 @@ def main() -> int:
         if kronos_predictor is None:
             raise RuntimeError("Kronos failed to load: " + kronos_status)
         LOG.info("Kronos self-test succeeded: %s", kronos_status)
+        return 0
+
+    if args.task == "dry-run":
+        load_kronos()
+        run_dry_run()
         return 0
 
     if not is_market_session():

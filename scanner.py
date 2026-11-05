@@ -35,11 +35,12 @@ NSE_EQUITY_CSV = os.getenv(
     "https://nsearchives.nseindia.com/content/equities/EQUITY_L.csv",
 )
 
-# Tuned configuration for capturing 1-2 high-conviction intraday momentum trades daily
-# from top NSE movers without being overly rigid or overly noisy.
+# Calibrated from dry-run-v2 telemetry on the 200-stock NSE universe:
+# Targets 1-2 elite intraday momentum trades daily from the top movers (3.2% to 9.5% move)
+# with strong RVOL and ADX trend confirmation, while avoiding early-morning noise.
 CFG: Dict[str, Any] = {
     "PRICE_FLOOR": float(os.getenv("PRICE_FLOOR", "50")),
-    "MIN_AVG_TURNOVER_INR": float(os.getenv("MIN_AVG_TURNOVER_INR", "50000000")),  # ₹5 Cr floor to include mid-cap 10%+ runners
+    "MIN_AVG_TURNOVER_INR": float(os.getenv("MIN_AVG_TURNOVER_INR", "50000000")),  # ₹5 Cr floor
     "LIQUIDITY_LOOKBACK_DAYS": 20,
     "DAILY_HISTORY_PERIOD": os.getenv("DAILY_HISTORY_PERIOD", "3mo"),
     "MAX_EQUITY_UNIVERSE": int(os.getenv("MAX_EQUITY_UNIVERSE", "2500")),
@@ -48,38 +49,40 @@ CFG: Dict[str, Any] = {
     "INTRADAY_PERIOD": "10d",
     "BAR_INTERVAL": "5m",
     "MIN_HISTORY_BARS": 45,
-    "MIN_TIME_SLOT_SESSIONS": 3,        # Require 3 of 5 prior sessions (prevents Yahoo missing-bar rejections)
-    "MIN_RELATIVE_VOLUME": 1.10,        # Same-slot 5m relative volume threshold
-    "MIN_CUMULATIVE_RVOL": 1.15,        # Session cumulative RVOL threshold
-    "BREAKOUT_LOOKBACK": 10,            # 10-bar (50-min) intraday consolidation breakout lookback
-    "MAX_EXTENSION_ATR": 2.5,           # Allow strong breakout candles without chasing exhausted spikes
-    "MIN_DAY_MOVE_PCT": float(os.getenv("MIN_DAY_MOVE_PCT", "1.4")),   # Must already show real intraday move
-    "MAX_DAY_MOVE_PCT": float(os.getenv("MAX_DAY_MOVE_PCT", "11.5")),  # Catch stocks heading to 10-15% before circuit
+    "MIN_TIME_SLOT_SESSIONS": 3,
+    "MIN_RELATIVE_VOLUME": 1.75,        # Require genuine 1.75x+ 5m volume surge for Tier-1
+    "MIN_CUMULATIVE_RVOL": 1.50,        # Require 1.50x+ cumulative session volume for Tier-1
+    "BREAKOUT_LOOKBACK": 12,            # 12-bar (1-hour) consolidation high/low breakout
+    "MAX_EXTENSION_ATR": 1.8,           # Prevent chasing over-extended vertical candles
+    "MIN_DAY_MOVE_PCT": float(os.getenv("MIN_DAY_MOVE_PCT", "3.2")),   # Focus strictly on stocks moving 3.2%+ toward 10%+
+    "MAX_DAY_MOVE_PCT": float(os.getenv("MAX_DAY_MOVE_PCT", "9.5")),   # Leave headroom before 10-20% circuit limits
     "MAX_BAR_AGE_MIN": 12,
-    "MIN_RSI_BUY": 52.0,
-    "MAX_RSI_BUY": 92.0,                # High 5m RSI (75-92) is normal on top 10%+ momentum breakouts
-    "MIN_RSI_SELL": 8.0,                # Fixed: bearish breakdowns have RSI < 48 (was broken at 45-55)
-    "MAX_RSI_SELL": 48.0,
-    "MIN_ADX_TREND": 18.0,              # ADX trend strength filter (from fmzquant ADX Trend Breakout strategy)
-    "MIN_BODY_RATIO": 0.18,
-    "MIN_CLOSE_LOCATION_BUY": 0.60,     # Close in top 40% of 5m bar range (was overly rigid at 0.78)
-    "MAX_CLOSE_LOCATION_SELL": 0.40,    # Close in bottom 40% of 5m bar range (was 0.22)
+    "MIN_RSI_BUY": 58.0,
+    "MAX_RSI_BUY": 90.0,
+    "MIN_RSI_SELL": 10.0,
+    "MAX_RSI_SELL": 42.0,
+    "MIN_ADX_TREND": 28.0,              # Strong directional trend (GROWW=62.1, SHRINGARMS=60.7 in dry-run)
+    "MIN_BODY_RATIO": 0.45,             # Solid breakout candle body (filters out doji/wick noise)
+    "MIN_CLOSE_LOCATION_BUY": 0.70,     # Close in top 30% of candle range
+    "MAX_CLOSE_LOCATION_SELL": 0.30,    # Close in bottom 30% of candle range
     "STOP_ATR_MULTIPLE": 1.50,
-    "MIN_STOP_PCT": 0.0075,             # Minimum 0.75% stop distance to avoid tiny noise stops
-    "MAX_STOP_PCT": 0.0250,             # Maximum 2.50% stop distance to cap risk
+    "MIN_STOP_PCT": 0.0075,             # Minimum 0.75% stop distance
+    "MAX_STOP_PCT": 0.0250,             # Maximum 2.50% stop distance
     "TARGET_R_MULTIPLE": 2.2,           # Primary target = 2.2R
     "RUNNER_R_MULTIPLE": 3.5,           # Runner target = 3.5R for 10%+ intraday movers
-    "MIN_SCORE_TIER1": int(os.getenv("MIN_SCORE_TIER1", "65")),
-    "MIN_SCORE_TIER2": int(os.getenv("MIN_SCORE_TIER2", "60")),
-    "TOP_MOVERS_POOL_SIZE": int(os.getenv("TOP_MOVERS_POOL_SIZE", "5")),
-    "TIER2_START_HOUR": 10,             # Activate Tier-2 Top-Mover Continuation from 10:45 IST if <2 trades found
-    "TIER2_START_MINUTE": 45,
-    "LAST_ENTRY_HOUR": 14,              # Avoid new intraday entries after 14:45 IST
-    "LAST_ENTRY_MINUTE": 45,
-    "MAX_SIGNALS_PER_CYCLE": int(os.getenv("MAX_SIGNALS_PER_CYCLE", "2")),
+    "MIN_SCORE_TIER1": int(os.getenv("MIN_SCORE_TIER1", "85")),
+    "MIN_SCORE_TIER2": int(os.getenv("MIN_SCORE_TIER2", "75")),
+    "TOP_MOVERS_POOL_SIZE": int(os.getenv("TOP_MOVERS_POOL_SIZE", "8")),
+    "MORNING_GUARD_HOUR": 10,           # Before 10:15 IST, allow at most 1 trade and require Score >= 92
+    "MORNING_GUARD_MINUTE": 15,
+    "TIER2_START_HOUR": 11,             # Activate Tier-2 Top-Mover Continuation from 11:30 IST if 0 trades found
+    "TIER2_START_MINUTE": 30,
+    "LAST_ENTRY_HOUR": 14,              # No new intraday entries after 14:30 IST
+    "LAST_ENTRY_MINUTE": 30,
+    "MAX_SIGNALS_PER_CYCLE": int(os.getenv("MAX_SIGNALS_PER_CYCLE", "1")),
     "MAX_SIGNALS_PER_DAY": int(os.getenv("MAX_SIGNALS_PER_DAY", "2")),
     "KRONOS_ENABLED": os.getenv("KRONOS_ENABLED", "true").lower() == "true",
-    "KRONOS_REQUIRED": os.getenv("KRONOS_REQUIRED", "false").lower() == "true",  # Advisory by default so random sampling never drops valid breakouts
+    "KRONOS_REQUIRED": os.getenv("KRONOS_REQUIRED", "false").lower() == "true",
     "KRONOS_MODEL": os.getenv("KRONOS_MODEL", "NeoQuasar/Kronos-mini"),
     "KRONOS_TOKENIZER": os.getenv("KRONOS_TOKENIZER", "NeoQuasar/Kronos-Tokenizer-2k"),
     "KRONOS_LOOKBACK": int(os.getenv("KRONOS_LOOKBACK", "96")),
@@ -380,12 +383,13 @@ def atr(df: pd.DataFrame, period: int = 14) -> float:
 
 
 def adx_di(df: pd.DataFrame, period: int = 14) -> Tuple[float, float, float]:
-    """Calculate Wilder's ADX, +DI, and -DI (from fmzquant ADX Trend Breakout Momentum strategy)."""
-    if len(df) < period * 2:
+    """Calculate Wilder's ADX, +DI, and -DI on recent bars."""
+    tail_df = df.tail(max(period * 4, 60))
+    if len(tail_df) < period * 2:
         return 20.0, 20.0, 20.0
-    high = df["high"].astype(float).values
-    low = df["low"].astype(float).values
-    close = df["close"].astype(float).values
+    high = tail_df["high"].astype(float).values
+    low = tail_df["low"].astype(float).values
+    close = tail_df["close"].astype(float).values
 
     up_move = high[1:] - high[:-1]
     down_move = low[:-1] - low[1:]
@@ -565,12 +569,13 @@ def evaluate_symbol(
     now: datetime,
     diagnostic: Optional[Dict[str, Any]] = None,
     allow_tier2: bool = False,
+    pre_normalized: bool = False,
 ) -> Optional[Dict[str, Any]]:
     if source.empty:
         if diagnostic is not None:
             diagnostic["rejected"] = "no_candles"
         return None
-    df = normalize_intraday(source)
+    df = source if pre_normalized else normalize_intraday(source)
     df = completed_bars(df, now)
     if len(df) < CFG["MIN_HISTORY_BARS"]:
         if diagnostic is not None:
@@ -590,6 +595,14 @@ def evaluate_symbol(
             diagnostic["rejected"] = "price_floor"
         return None
 
+    # Check intraday % move early (fast filter: focuses strictly on 3.2% to 9.5% top movers)
+    day_move, open_move, session_high, session_low = compute_effective_day_move(df, last_idx, daily, price)
+    min_move_req = 2.8 if allow_tier2 else CFG["MIN_DAY_MOVE_PCT"]
+    if abs(day_move) < min_move_req or abs(day_move) > CFG["MAX_DAY_MOVE_PCT"]:
+        if diagnostic is not None:
+            diagnostic["rejected"] = "day_move"
+        return None
+
     relvol, slot_sessions = same_slot_relative_volume(df, last_idx, CFG["MIN_TIME_SLOT_SESSIONS"])
     cumulative_relvol, cumulative_sessions = session_cumulative_relative_volume(df, last_idx, CFG["MIN_TIME_SLOT_SESSIONS"])
     sessions_compared = max(slot_sessions, cumulative_sessions)
@@ -600,7 +613,13 @@ def evaluate_symbol(
             "sessions": sessions_compared,
         }
 
-    vol_pass = (relvol >= CFG["MIN_RELATIVE_VOLUME"] and cumulative_relvol >= 0.95) or (cumulative_relvol >= CFG["MIN_CUMULATIVE_RVOL"])
+    # Strict RVOL confirmation for Tier-1; slightly relaxed for Tier-2 Top-Mover continuation
+    if allow_tier2:
+        vol_pass = (relvol >= 1.35 and cumulative_relvol >= 1.25) or (cumulative_relvol >= 1.60)
+    else:
+        vol_pass = (relvol >= CFG["MIN_RELATIVE_VOLUME"] and cumulative_relvol >= CFG["MIN_CUMULATIVE_RVOL"]) or (
+            relvol >= 2.50 and cumulative_relvol >= 1.25
+        )
     if not vol_pass:
         if diagnostic is not None:
             diagnostic["rejected"] = "relative_volume"
@@ -626,12 +645,6 @@ def evaluate_symbol(
     prior_high = float(prev["high"].max())
     prior_low = float(prev["low"].min())
 
-    day_move, open_move, session_high, session_low = compute_effective_day_move(df, last_idx, daily, price)
-    if abs(day_move) < CFG["MIN_DAY_MOVE_PCT"] or abs(day_move) > CFG["MAX_DAY_MOVE_PCT"]:
-        if diagnostic is not None:
-            diagnostic["rejected"] = "day_move"
-        return None
-
     bar_range = max(float(last["high"] - last["low"]), 1e-9)
     body_ratio = abs(float(last["close"] - last["open"])) / bar_range
     close_location = (float(last["close"]) - float(last["low"])) / bar_range
@@ -647,18 +660,19 @@ def evaluate_symbol(
         and close_location <= CFG["MAX_CLOSE_LOCATION_SELL"]
     )
 
-    breakout_buy = (price >= prior_high * 0.999) or (price >= session_high * 0.9965 and adx_val >= 22.0 and day_move >= 2.2)
-    breakdown_sell = (price <= prior_low * 1.001) or (price <= session_low * 1.0035 and adx_val >= 22.0 and day_move <= -2.2)
+    # Tier-1 requires a genuine fresh breakout above 12-bar high (or session high breakout)
+    breakout_buy = price > prior_high and price >= session_high * 0.996
+    breakdown_sell = price < prior_low and price <= session_low * 1.004
 
     daily_ema20 = float(daily.get("daily_ema20", price))
     daily_ema50 = float(daily.get("daily_ema50", price))
-    daily_up = (price > daily_ema20) or (day_move >= 2.5 and cumulative_relvol >= 1.35)
-    daily_down = (price < daily_ema20) or (day_move <= -2.5 and cumulative_relvol >= 1.35)
+    daily_up = (price > daily_ema20) or (day_move >= 4.0 and cumulative_relvol >= 1.80)
+    daily_down = (price < daily_ema20) or (day_move <= -4.0 and cumulative_relvol >= 1.80)
 
     above_vwap = price > vwap_value
     below_vwap = price < vwap_value
-    adx_buy = adx_val >= CFG["MIN_ADX_TREND"] and plus_di >= minus_di * 0.95
-    adx_sell = adx_val >= CFG["MIN_ADX_TREND"] and minus_di >= plus_di * 0.95
+    adx_buy = adx_val >= CFG["MIN_ADX_TREND"] and plus_di > minus_di
+    adx_sell = adx_val >= CFG["MIN_ADX_TREND"] and minus_di > plus_di
 
     side = None
     breakout_level = None
@@ -674,6 +688,7 @@ def evaluate_symbol(
         and adx_buy
         and CFG["MIN_RSI_BUY"] <= rsi_value <= CFG["MAX_RSI_BUY"]
         and day_move >= CFG["MIN_DAY_MOVE_PCT"]
+        and open_move >= 1.0
     ):
         extension = max(0.0, (price - prior_high) / atr_value)
         if extension <= CFG["MAX_EXTENSION_ATR"]:
@@ -687,36 +702,42 @@ def evaluate_symbol(
         and adx_sell
         and CFG["MIN_RSI_SELL"] <= rsi_value <= CFG["MAX_RSI_SELL"]
         and day_move <= -CFG["MIN_DAY_MOVE_PCT"]
+        and open_move <= -1.0
     ):
         extension = max(0.0, (prior_low - price) / atr_value)
         if extension <= CFG["MAX_EXTENSION_ATR"]:
             side, breakout_level = "SELL", prior_low
 
+    # Tier-2 Top-Mover Continuation fallback (only after 11:30 IST if 0 trades have fired today)
     if not side and allow_tier2:
-        near_day_high = price >= session_high * 0.988
-        near_day_low = price <= session_low * 1.012
+        near_day_high = price >= session_high * 0.992
+        near_day_low = price <= session_low * 1.008
         if (
-            day_move >= 2.5
+            day_move >= 3.5
+            and open_move >= 1.2
             and above_vwap
-            and price > slow
-            and fast >= slow * 0.998
+            and fast > slow
             and near_day_high
-            and float(last["close"]) >= float(last["open"])
-            and close_location >= 0.50
-            and 52.0 <= rsi_value <= 92.0
+            and float(last["close"]) > float(last["open"])
+            and body_ratio >= 0.35
+            and close_location >= 0.65
+            and adx_val >= 24.0
+            and 58.0 <= rsi_value <= 90.0
         ):
             side, breakout_level = "BUY", session_high
             tier = "TIER-2"
             setup_label = "Tier-2: Top-5 Mover Intraday Trend Continuation"
         elif (
-            day_move <= -2.5
+            day_move <= -3.5
+            and open_move <= -1.2
             and below_vwap
-            and price < slow
-            and fast <= slow * 1.002
+            and fast < slow
             and near_day_low
-            and float(last["close"]) <= float(last["open"])
-            and close_location <= 0.50
-            and 8.0 <= rsi_value <= 48.0
+            and float(last["close"]) < float(last["open"])
+            and body_ratio >= 0.35
+            and close_location <= 0.35
+            and adx_val >= 24.0
+            and 10.0 <= rsi_value <= 42.0
         ):
             side, breakout_level = "SELL", session_low
             tier = "TIER-2"
@@ -740,17 +761,21 @@ def evaluate_symbol(
             diagnostic["rejected"] = "technical_alignment"
         return None
 
+    # Composite conviction score (0-100)
     score = 0
-    score += 20 if relvol >= 2.0 else (15 if relvol >= 1.4 else 10)
-    score += 15 if cumulative_relvol >= 1.6 else (10 if cumulative_relvol >= 1.25 else 6)
-    score += 15 if 2.5 <= abs(day_move) <= 7.5 else (10 if abs(day_move) >= 1.8 else 6)
+    score += 22 if relvol >= 2.4 else (16 if relvol >= 1.8 else 10)
+    score += 18 if cumulative_relvol >= 2.0 else (14 if cumulative_relvol >= 1.5 else 8)
+    score += 18 if 4.0 <= abs(day_move) <= 8.5 else (14 if abs(day_move) >= 3.2 else 8)
     score += 10 if (daily_ema20 > daily_ema50 if side == "BUY" else daily_ema20 < daily_ema50) else 5
-    score += 15 if adx_val >= 25.0 else (10 if adx_val >= 18.0 else 5)
-    score += 10 if body_ratio >= 0.55 else 6
-    score += 10 if (58 <= rsi_value <= 85 if side == "BUY" else 15 <= rsi_value <= 42) else 6
-    score += 5 if tier == "TIER-1" else 0
+    score += 15 if adx_val >= 35.0 else (12 if adx_val >= 28.0 else 6)
+    score += 10 if body_ratio >= 0.60 else (7 if body_ratio >= 0.45 else 4)
+    score += 7 if tier == "TIER-1" else 2
 
     min_req_score = CFG["MIN_SCORE_TIER1"] if tier == "TIER-1" else CFG["MIN_SCORE_TIER2"]
+    # Before 10:15 IST, require elite conviction (Score >= 92) so early volatility doesn't waste slots
+    if now.time() < dtime(CFG["MORNING_GUARD_HOUR"], CFG["MORNING_GUARD_MINUTE"]):
+        min_req_score = max(min_req_score, 92)
+
     if score < min_req_score:
         if diagnostic is not None:
             diagnostic["rejected"] = "low_score"
@@ -915,7 +940,7 @@ def rank_top_intraday_movers(
     daily_map: Dict[str, Dict[str, Any]],
     now: datetime,
 ) -> List[Tuple[float, str]]:
-    """Rank stocks by absolute intraday move % among liquid stocks moving between 2.2% and 11.5%."""
+    """Rank stocks by absolute intraday move % among liquid stocks moving between 2.8% and 9.5%."""
     movers: List[Tuple[float, str]] = []
     for symbol, raw_df in intraday_map.items():
         if raw_df is None or raw_df.empty:
@@ -926,7 +951,7 @@ def rank_top_intraday_movers(
         last_idx = df.index[-1]
         price = float(df.iloc[-1]["close"])
         day_move, _, _, _ = compute_effective_day_move(df, last_idx, daily_map.get(symbol, {}), price)
-        if 2.2 <= abs(day_move) <= CFG["MAX_DAY_MOVE_PCT"]:
+        if 2.8 <= abs(day_move) <= CFG["MAX_DAY_MOVE_PCT"]:
             movers.append((abs(day_move), symbol))
     movers.sort(key=lambda x: x[0], reverse=True)
     return movers
@@ -943,6 +968,15 @@ def run_scan_cycle() -> Dict[str, Any]:
     if existing_today >= CFG["MAX_SIGNALS_PER_DAY"]:
         return {
             "status": "daily_target_reached",
+            "at": now.isoformat(),
+            "signals_today": existing_today,
+            "telegram_delivered": delivered_prior,
+        }
+
+    # Morning slot pacing: allow at most 1 trade before 10:15 IST so we always reserve a slot for prime mid-morning breakouts
+    if now.time() < dtime(CFG["MORNING_GUARD_HOUR"], CFG["MORNING_GUARD_MINUTE"]) and existing_today >= 1:
+        return {
+            "status": "morning_slot_used_waiting_for_midday",
             "at": now.isoformat(),
             "signals_today": existing_today,
             "telegram_delivered": delivered_prior,
@@ -975,21 +1009,25 @@ def run_scan_cycle() -> Dict[str, Any]:
         time.sleep(0.08)
 
     alerted_today = get_today_alerted_symbols()
+    top_movers = rank_top_intraday_movers(intraday_all, daily_map, now)
+    top_mover_pool = {sym for _, sym in top_movers[:CFG["TOP_MOVERS_POOL_SIZE"] * 2]}
+
     candidates: List[Tuple[int, float, Dict[str, Any], pd.DataFrame]] = []
 
+    # Pass 1: Tier-1 Strict Multi-Factor Breakout Scan focused on today's Top Movers
     for symbol in symbols:
-        if symbol in alerted_today:
+        if symbol in alerted_today or (top_mover_pool and symbol not in top_mover_pool):
             continue
         frame = intraday_all.get(symbol, pd.DataFrame())
         signal = evaluate_symbol(symbol, frame, daily_map[symbol], now, allow_tier2=False)
         if signal:
             candidates.append((signal["score"], abs(signal["day_move_pct"]), signal, frame))
 
-    top_movers = rank_top_intraday_movers(intraday_all, daily_map, now)
+    # Pass 2: Tier-2 Top-Mover Continuation fallback after 11:30 IST if 0 signals have fired today
     tier2_triggered = False
-    if not candidates and is_tier2_window(now) and existing_today < CFG["MAX_SIGNALS_PER_DAY"]:
+    if not candidates and is_tier2_window(now) and existing_today == 0:
         tier2_triggered = True
-        top_mover_symbols = [sym for _, sym in top_movers[:max(CFG["TOP_MOVERS_POOL_SIZE"] * 2, 10)]]
+        top_mover_symbols = [sym for _, sym in top_movers[:CFG["TOP_MOVERS_POOL_SIZE"]]]
         for symbol in top_mover_symbols:
             if symbol in alerted_today:
                 continue
@@ -1050,7 +1088,7 @@ def run_scan_cycle() -> Dict[str, Any]:
 
 
 def run_dry_run_v2() -> Dict[str, Any]:
-    """Historical full-session diagnostic replay. No Telegram or signal DB writes."""
+    """Historical full-session diagnostic replay with chronological live-pacing simulation."""
     from collections import Counter
     started = time.monotonic()
     if not UNIVERSE_CACHE.exists():
@@ -1081,7 +1119,7 @@ def run_dry_run_v2() -> Dict[str, Any]:
         raise RuntimeError("Yahoo returned no usable NSE 5-minute candles")
     replay_day = max(latest_sessions)
     actual_now = datetime.now(TZ)
-    end = datetime.combine(replay_day, dtime(15, 30), tzinfo=TZ)
+    end = datetime.combine(replay_day, dtime(CFG["LAST_ENTRY_HOUR"], CFG["LAST_ENTRY_MINUTE"]), tzinfo=TZ)
     if replay_day == actual_now.date():
         end = min(end, actual_now)
 
@@ -1105,14 +1143,16 @@ def run_dry_run_v2() -> Dict[str, Any]:
         symbols_with_session += 1
         for candle_start in today.index:
             anchor = candle_start.to_pydatetime() + timedelta(minutes=5)
-            if anchor > end:
+            if anchor > end or anchor.time() < dtime(9, 20):
                 continue
             total_checks += 1
             replayed_bars += 1
             prefix = frame.loc[frame.index <= candle_start]
             diag: Dict[str, Any] = {}
             allow_t2 = anchor.time() >= dtime(CFG["TIER2_START_HOUR"], CFG["TIER2_START_MINUTE"])
-            signal = evaluate_symbol(symbol, prefix, entry, anchor, diagnostic=diag, allow_tier2=allow_t2)
+            signal = evaluate_symbol(
+                symbol, prefix, entry, anchor, diagnostic=diag, allow_tier2=allow_t2, pre_normalized=True
+            )
             if signal:
                 candidates.append((signal["score"], abs(signal["day_move_pct"]), signal, prefix, anchor))
                 rejection["technical_pass"] += 1
@@ -1124,14 +1164,35 @@ def run_dry_run_v2() -> Dict[str, Any]:
                     if not passed:
                         conditions_failed[key] += 1
 
-    candidates.sort(key=lambda item: (-item[0], -item[1], item[2]["candle_time"], item[2]["symbol"]))
+    # 1) Best 2 overall across the session (by score & move %)
+    candidates_by_rank = sorted(candidates, key=lambda item: (-item[0], -item[1], item[2]["candle_time"], item[2]["symbol"]))
     seen_symbols = set()
     unique_daily_picks = []
-    for item in candidates:
+    for item in candidates_by_rank:
         sym = item[2]["symbol"]
         if sym not in seen_symbols:
             seen_symbols.add(sym)
             unique_daily_picks.append(item)
+
+    # 2) Simulated chronological live execution (with morning guard & 1 signal per 5m cycle)
+    candidates_by_time = sorted(candidates, key=lambda item: (item[2]["candle_time"], -item[0], -item[1]))
+    live_simulated_picks = []
+    live_seen = set()
+    used_times = set()
+    for item in candidates_by_time:
+        if len(live_simulated_picks) >= CFG["MAX_SIGNALS_PER_DAY"]:
+            break
+        sig = item[2]
+        anchor_dt = item[4]
+        if sig["symbol"] in live_seen or sig["candle_time"] in used_times:
+            continue
+        if anchor_dt.time() < dtime(CFG["MORNING_GUARD_HOUR"], CFG["MORNING_GUARD_MINUTE"]) and len(live_simulated_picks) >= 1:
+            continue
+        if sig["tier"] == "TIER-2" and len(live_simulated_picks) > 0:
+            continue
+        live_seen.add(sig["symbol"])
+        used_times.add(sig["candle_time"])
+        live_simulated_picks.append(item)
 
     independent = {"status": "not_run"}
     eligible = []
@@ -1174,6 +1235,7 @@ def run_dry_run_v2() -> Dict[str, Any]:
         "alignment_condition_failures": dict(conditions_failed.most_common()),
         "technical_candidates_bars": len(candidates),
         "unique_symbol_candidates": len(unique_daily_picks),
+        "simulated_live_daily_trades": [x[2] for x in live_simulated_picks],
         "selected_top_2_daily_trades": [x[2] for x in unique_daily_picks[:CFG["MAX_SIGNALS_PER_DAY"]]],
         "top_10_unique_candidates": [x[2] for x in unique_daily_picks[:10]],
         "kronos_independent_test": independent,
@@ -1187,7 +1249,7 @@ def run_dry_run_v2() -> Dict[str, Any]:
         if k in (
             "session_date_ist", "symbols_requested", "symbols_with_replay_session",
             "candles_evaluated", "primary_rejection_counts", "unique_symbol_candidates",
-            "selected_top_2_daily_trades", "elapsed_seconds",
+            "simulated_live_daily_trades", "selected_top_2_daily_trades", "elapsed_seconds",
         )
     }, default=str))
     return report

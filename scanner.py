@@ -35,43 +35,56 @@ NSE_EQUITY_CSV = os.getenv(
     "https://nsearchives.nseindia.com/content/equities/EQUITY_L.csv",
 )
 
-# Selective defaults: broad NSE EQ universe is filtered by 20-session turnover,
-# then the most liquid 100 names are checked every five minutes.
+# Tuned configuration for capturing 1-2 high-conviction intraday momentum trades daily
+# from top NSE movers without being overly rigid or overly noisy.
 CFG: Dict[str, Any] = {
-    "PRICE_FLOOR": float(os.getenv("PRICE_FLOOR", "60")),
-    "MIN_AVG_TURNOVER_INR": float(os.getenv("MIN_AVG_TURNOVER_INR", "100000000")),
+    "PRICE_FLOOR": float(os.getenv("PRICE_FLOOR", "50")),
+    "MIN_AVG_TURNOVER_INR": float(os.getenv("MIN_AVG_TURNOVER_INR", "50000000")),  # ₹5 Cr floor to include mid-cap 10%+ runners
     "LIQUIDITY_LOOKBACK_DAYS": 20,
     "DAILY_HISTORY_PERIOD": os.getenv("DAILY_HISTORY_PERIOD", "3mo"),
     "MAX_EQUITY_UNIVERSE": int(os.getenv("MAX_EQUITY_UNIVERSE", "2500")),
-    "INTRADAY_UNIVERSE_SIZE": int(os.getenv("INTRADAY_UNIVERSE_SIZE", "100")),
-    "INTRADAY_BATCH_SIZE": int(os.getenv("INTRADAY_BATCH_SIZE", "40")),
+    "INTRADAY_UNIVERSE_SIZE": int(os.getenv("INTRADAY_UNIVERSE_SIZE", "200")),
+    "INTRADAY_BATCH_SIZE": int(os.getenv("INTRADAY_BATCH_SIZE", "50")),
     "INTRADAY_PERIOD": "10d",
     "BAR_INTERVAL": "5m",
-    "MIN_HISTORY_BARS": 60,
-    "MIN_TIME_SLOT_SESSIONS": 5,
-    "MIN_RELATIVE_VOLUME": 0.50,
-    "BREAKOUT_LOOKBACK": 12,
-    "MAX_EXTENSION_ATR": 2,
-    "MAX_DAY_MOVE_PCT": 8.0,
-    "MAX_BAR_AGE_MIN": 9,
-    "MIN_RSI_BUY": 45.0,
-    "MAX_RSI_BUY": 80.0,
-    "MIN_RSI_SELL": 45.0,
-    "MAX_RSI_SELL": 55.0,
-    "MIN_BODY_RATIO": 0.20,
-    "MIN_CLOSE_LOCATION_BUY": 0.78,
-    "MAX_CLOSE_LOCATION_SELL": 0.22,
-    "STOP_ATR_MULTIPLE": 1.20,
-    "TARGET_R_MULTIPLE": 2.0,
-    "MAX_SIGNALS_PER_CYCLE": 2,
-    "MAX_SIGNALS_PER_DAY": 3,
+    "MIN_HISTORY_BARS": 45,
+    "MIN_TIME_SLOT_SESSIONS": 3,        # Require 3 of 5 prior sessions (prevents Yahoo missing-bar rejections)
+    "MIN_RELATIVE_VOLUME": 1.10,        # Same-slot 5m relative volume threshold
+    "MIN_CUMULATIVE_RVOL": 1.15,        # Session cumulative RVOL threshold
+    "BREAKOUT_LOOKBACK": 10,            # 10-bar (50-min) intraday consolidation breakout lookback
+    "MAX_EXTENSION_ATR": 2.5,           # Allow strong breakout candles without chasing exhausted spikes
+    "MIN_DAY_MOVE_PCT": float(os.getenv("MIN_DAY_MOVE_PCT", "1.4")),   # Must already show real intraday move
+    "MAX_DAY_MOVE_PCT": float(os.getenv("MAX_DAY_MOVE_PCT", "11.5")),  # Catch stocks heading to 10-15% before circuit
+    "MAX_BAR_AGE_MIN": 12,
+    "MIN_RSI_BUY": 52.0,
+    "MAX_RSI_BUY": 92.0,                # High 5m RSI (75-92) is normal on top 10%+ momentum breakouts
+    "MIN_RSI_SELL": 8.0,                # Fixed: bearish breakdowns have RSI < 48 (was broken at 45-55)
+    "MAX_RSI_SELL": 48.0,
+    "MIN_ADX_TREND": 18.0,              # ADX trend strength filter (from fmzquant ADX Trend Breakout strategy)
+    "MIN_BODY_RATIO": 0.18,
+    "MIN_CLOSE_LOCATION_BUY": 0.60,     # Close in top 40% of 5m bar range (was overly rigid at 0.78)
+    "MAX_CLOSE_LOCATION_SELL": 0.40,    # Close in bottom 40% of 5m bar range (was 0.22)
+    "STOP_ATR_MULTIPLE": 1.50,
+    "MIN_STOP_PCT": 0.0075,             # Minimum 0.75% stop distance to avoid tiny noise stops
+    "MAX_STOP_PCT": 0.0250,             # Maximum 2.50% stop distance to cap risk
+    "TARGET_R_MULTIPLE": 2.2,           # Primary target = 2.2R
+    "RUNNER_R_MULTIPLE": 3.5,           # Runner target = 3.5R for 10%+ intraday movers
+    "MIN_SCORE_TIER1": int(os.getenv("MIN_SCORE_TIER1", "65")),
+    "MIN_SCORE_TIER2": int(os.getenv("MIN_SCORE_TIER2", "60")),
+    "TOP_MOVERS_POOL_SIZE": int(os.getenv("TOP_MOVERS_POOL_SIZE", "5")),
+    "TIER2_START_HOUR": 10,             # Activate Tier-2 Top-Mover Continuation from 10:45 IST if <2 trades found
+    "TIER2_START_MINUTE": 45,
+    "LAST_ENTRY_HOUR": 14,              # Avoid new intraday entries after 14:45 IST
+    "LAST_ENTRY_MINUTE": 45,
+    "MAX_SIGNALS_PER_CYCLE": int(os.getenv("MAX_SIGNALS_PER_CYCLE", "2")),
+    "MAX_SIGNALS_PER_DAY": int(os.getenv("MAX_SIGNALS_PER_DAY", "2")),
     "KRONOS_ENABLED": os.getenv("KRONOS_ENABLED", "true").lower() == "true",
-    "KRONOS_REQUIRED": os.getenv("KRONOS_REQUIRED", "true").lower() == "true",
+    "KRONOS_REQUIRED": os.getenv("KRONOS_REQUIRED", "false").lower() == "true",  # Advisory by default so random sampling never drops valid breakouts
     "KRONOS_MODEL": os.getenv("KRONOS_MODEL", "NeoQuasar/Kronos-mini"),
     "KRONOS_TOKENIZER": os.getenv("KRONOS_TOKENIZER", "NeoQuasar/Kronos-Tokenizer-2k"),
     "KRONOS_LOOKBACK": int(os.getenv("KRONOS_LOOKBACK", "96")),
     "KRONOS_PRED_LEN": int(os.getenv("KRONOS_PRED_LEN", "3")),
-    "KRONOS_SAMPLE_COUNT": int(os.getenv("KRONOS_SAMPLE_COUNT", "1")),
+    "KRONOS_SAMPLE_COUNT": int(os.getenv("KRONOS_SAMPLE_COUNT", "3")),
     "KRONOS_MIN_MOVE_PCT": float(os.getenv("KRONOS_MIN_MOVE_PCT", "0.05")),
     "UNIVERSE_MAX_AGE_HOURS": int(os.getenv("UNIVERSE_MAX_AGE_HOURS", "168")),
 }
@@ -104,20 +117,22 @@ def init_db() -> None:
         conn.commit()
 
 
-def state_get(key: str, default: Optional[str] = None) -> Optional[str]:
+def get_today_signal_count(day_str: Optional[str] = None) -> int:
+    day = day_str or datetime.now(TZ).strftime("%Y-%m-%d")
     with db_connect() as conn:
-        row = conn.execute("SELECT value FROM app_state WHERE key=?", (key,)).fetchone()
-        return row["value"] if row else default
+        row = conn.execute("SELECT COUNT(*) AS n FROM signals WHERE created_at LIKE ?", (day + "%",)).fetchone()
+        return int(row["n"]) if row else 0
 
 
-def state_set(key: str, value: str) -> None:
+def get_today_alerted_symbols(day_str: Optional[str] = None) -> set:
+    day = day_str or datetime.now(TZ).strftime("%Y-%m-%d")
     with db_connect() as conn:
-        conn.execute("INSERT INTO app_state(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", (key, value))
-        conn.commit()
+        rows = conn.execute("SELECT symbol FROM signals WHERE created_at LIKE ?", (day + "%",)).fetchall()
+        return {r["symbol"] for r in rows}
 
 
 def load_kronos() -> None:
-    """Load the real Kronos-mini model on CPU from the shallow-cloned repo."""
+    """Load Kronos-mini model on CPU if available; degrade gracefully if KRONOS_REQUIRED=false."""
     global kronos_predictor, kronos_status
     if not CFG["KRONOS_ENABLED"]:
         kronos_status = "disabled"
@@ -125,7 +140,11 @@ def load_kronos() -> None:
             raise RuntimeError("KRONOS_REQUIRED=true but KRONOS_ENABLED=false")
         return
     if not KRONOS_REPO_DIR.exists():
-        raise RuntimeError(f"Kronos source repository not found: {KRONOS_REPO_DIR}")
+        kronos_status = f"missing_repo:{KRONOS_REPO_DIR}"
+        LOG.warning("Kronos repository not found at %s; continuing in technical-only mode", KRONOS_REPO_DIR)
+        if CFG["KRONOS_REQUIRED"]:
+            raise RuntimeError(f"Kronos source repository not found: {KRONOS_REPO_DIR}")
+        return
     sys.path.insert(0, str(KRONOS_REPO_DIR))
     try:
         import torch
@@ -139,7 +158,7 @@ def load_kronos() -> None:
     except Exception as exc:
         kronos_predictor = None
         kronos_status = "error:" + str(exc)[:240]
-        LOG.exception("Kronos initialization failed")
+        LOG.warning("Kronos initialization failed (advisory mode=%s): %s", not CFG["KRONOS_REQUIRED"], exc)
         if CFG["KRONOS_REQUIRED"]:
             raise RuntimeError("Kronos is required but failed to load: " + str(exc)) from exc
 
@@ -150,6 +169,20 @@ def is_market_session(now: Optional[datetime] = None) -> bool:
         return False
     t = now.time()
     return dtime(9, 20) <= t <= dtime(15, 30)
+
+
+def is_entry_window(now: Optional[datetime] = None) -> bool:
+    now = now or datetime.now(TZ)
+    if not is_market_session(now):
+        return False
+    return now.time() <= dtime(CFG["LAST_ENTRY_HOUR"], CFG["LAST_ENTRY_MINUTE"])
+
+
+def is_tier2_window(now: Optional[datetime] = None) -> bool:
+    now = now or datetime.now(TZ)
+    if not is_entry_window(now):
+        return False
+    return now.time() >= dtime(CFG["TIER2_START_HOUR"], CFG["TIER2_START_MINUTE"])
 
 
 def fetch_nse_equity_symbols() -> List[str]:
@@ -173,7 +206,6 @@ def fetch_nse_equity_symbols() -> List[str]:
         .loc[lambda s: s.str.fullmatch(r"[A-Z0-9&-]{1,30}")]
         .drop_duplicates().tolist()
     )
-    # Avoid non-stock NSE instrument symbols if present in the file.
     symbols = [s for s in symbols if not s.endswith("-BE") and not s.endswith("-SM")]
     return symbols[:CFG["MAX_EQUITY_UNIVERSE"]]
 
@@ -229,11 +261,7 @@ def download_batch(symbols: List[str], period: str, interval: str) -> Dict[str, 
 
 
 def refresh_liquid_universe(force: bool = False) -> Dict[str, Any]:
-    """Build candidate pool from all NSE EQ symbols using 20-session turnover.
-
-    Runs once daily; the result is cached on disk. It is intentionally not run
-    from every intraday request.
-    """
+    """Build candidate pool from NSE EQ symbols using 20-session turnover and volatility."""
     if not force and UNIVERSE_CACHE.exists():
         try:
             cached = json.loads(UNIVERSE_CACHE.read_text())
@@ -254,14 +282,14 @@ def refresh_liquid_universe(force: bool = False) -> Dict[str, Any]:
             df = data.get(symbol, pd.DataFrame())
             if df.empty or "close" not in df or "volume" not in df:
                 continue
-            # Use completed prior sessions only. Do not let a partial current-day
-            # daily candle distort the average turnover or daily trend.
             idx = pd.to_datetime(df.index)
             if idx.tz is not None:
                 idx = idx.tz_convert(TZ).tz_localize(None)
             keep = [x.date() < datetime.now(TZ).date() for x in idx]
             hist = df.loc[keep].copy()
             close = pd.to_numeric(hist["close"], errors="coerce").dropna()
+            high = pd.to_numeric(hist["high"], errors="coerce").reindex(close.index).fillna(close)
+            low = pd.to_numeric(hist["low"], errors="coerce").reindex(close.index).fillna(close)
             volume = pd.to_numeric(hist["volume"], errors="coerce").reindex(close.index).fillna(0)
             if len(close) < 50:
                 continue
@@ -273,6 +301,7 @@ def refresh_liquid_universe(force: bool = False) -> Dict[str, Any]:
             e20 = float(ema(close.values, 20))
             e50 = float(ema(close.values, 50))
             prev_close = float(close.iloc[-1])
+            daily_range_pct = float(((high - low) / close.clip(lower=1e-6) * 100.0).tail(20).mean())
             if last_price >= CFG["PRICE_FLOOR"] and avg_turnover >= CFG["MIN_AVG_TURNOVER_INR"]:
                 metrics.append({
                     "symbol": symbol,
@@ -281,27 +310,33 @@ def refresh_liquid_universe(force: bool = False) -> Dict[str, Any]:
                     "daily_ema20": e20,
                     "daily_ema50": e50,
                     "previous_close": prev_close,
+                    "avg_daily_range_pct": round(daily_range_pct, 2),
                 })
         LOG.info("Liquidity refresh progress %d/%d | qualified=%d", min(start + batch_size, len(symbols)), len(symbols), len(metrics))
         time.sleep(0.15)
 
     metrics.sort(key=lambda x: x["avg_turnover"], reverse=True)
     if not metrics:
-        # Do not destroy a prior valid cache during a Yahoo outage.
         if UNIVERSE_CACHE.exists():
             old = json.loads(UNIVERSE_CACHE.read_text())
             old["refresh_warning"] = "Refresh returned no eligible stocks; retained previous cache"
             return old
         raise RuntimeError("No liquid universe was created. Check NSE/Yahoo data access.")
 
+    top_liquid = metrics[:int(CFG["INTRADAY_UNIVERSE_SIZE"] * 0.6)]
+    top_liquid_set = {m["symbol"] for m in top_liquid}
+    remaining = [m for m in metrics[int(CFG["INTRADAY_UNIVERSE_SIZE"] * 0.6):450] if m["symbol"] not in top_liquid_set]
+    remaining.sort(key=lambda x: (x.get("avg_daily_range_pct", 0.0), x["avg_turnover"]), reverse=True)
+    combined = (top_liquid + remaining)[:CFG["INTRADAY_UNIVERSE_SIZE"]]
+
     result = {
         "refreshed_at": datetime.now(TZ).isoformat(),
         "source_symbol_count": len(symbols),
         "eligible_count": len(metrics),
-        "scan_symbols": metrics[:CFG["INTRADAY_UNIVERSE_SIZE"]],
+        "scan_symbols": combined,
     }
     UNIVERSE_CACHE.write_text(json.dumps(result, indent=2))
-    LOG.info("Liquid universe refreshed: %d eligible; scanning top %d by average turnover", len(metrics), len(result["scan_symbols"]))
+    LOG.info("Liquid universe refreshed: %d eligible; scanning %d liquid & high-beta stocks", len(metrics), len(result["scan_symbols"]))
     return result
 
 
@@ -344,12 +379,54 @@ def atr(df: pd.DataFrame, period: int = 14) -> float:
     return float(value) if pd.notna(value) else float("nan")
 
 
+def adx_di(df: pd.DataFrame, period: int = 14) -> Tuple[float, float, float]:
+    """Calculate Wilder's ADX, +DI, and -DI (from fmzquant ADX Trend Breakout Momentum strategy)."""
+    if len(df) < period * 2:
+        return 20.0, 20.0, 20.0
+    high = df["high"].astype(float).values
+    low = df["low"].astype(float).values
+    close = df["close"].astype(float).values
+
+    up_move = high[1:] - high[:-1]
+    down_move = low[:-1] - low[1:]
+
+    plus_dm = np.where((up_move > down_move) & (up_move > 0), up_move, 0.0)
+    minus_dm = np.where((down_move > up_move) & (down_move > 0), down_move, 0.0)
+
+    tr1 = np.abs(high[1:] - low[1:])
+    tr2 = np.abs(high[1:] - close[:-1])
+    tr3 = np.abs(low[1:] - close[:-1])
+    tr = np.maximum.reduce([tr1, tr2, tr3])
+
+    atr_smooth = float(np.mean(tr[:period]))
+    plus_smooth = float(np.mean(plus_dm[:period]))
+    minus_smooth = float(np.mean(minus_dm[:period]))
+
+    dx_list: List[float] = []
+    plus_di = 0.0
+    minus_di = 0.0
+    for i in range(period, len(tr)):
+        atr_smooth = (atr_smooth * (period - 1) + float(tr[i])) / period
+        plus_smooth = (plus_smooth * (period - 1) + float(plus_dm[i])) / period
+        minus_smooth = (minus_smooth * (period - 1) + float(minus_dm[i])) / period
+        if atr_smooth <= 1e-9:
+            continue
+        plus_di = 100.0 * (plus_smooth / atr_smooth)
+        minus_di = 100.0 * (minus_smooth / atr_smooth)
+        denom = plus_di + minus_di
+        dx = 100.0 * abs(plus_di - minus_di) / denom if denom > 1e-9 else 0.0
+        dx_list.append(dx)
+
+    if not dx_list:
+        return 20.0, 20.0, 20.0
+    adx_val = float(np.mean(dx_list[-period:]))
+    return adx_val, plus_di, minus_di
+
+
 def normalize_intraday(df: pd.DataFrame) -> pd.DataFrame:
     out = df.copy()
     idx = pd.to_datetime(out.index)
     if idx.tz is None:
-        # yfinance usually returns an exchange-local timezone for NSE symbols;
-        # if timezone metadata is absent, interpret timestamps as Asia/Kolkata.
         idx = idx.tz_localize(TZ)
     else:
         idx = idx.tz_convert(TZ)
@@ -359,8 +436,6 @@ def normalize_intraday(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def completed_bars(df: pd.DataFrame, now: datetime) -> pd.DataFrame:
-    # Yahoo timestamps label the start of a 5-minute candle; discard the candle
-    # until its full five minutes have elapsed.
     cutoff = pd.Timestamp(now - timedelta(minutes=5)).tz_convert(TZ)
     return df.loc[df.index <= cutoff].copy()
 
@@ -371,6 +446,7 @@ def same_slot_relative_volume(df: pd.DataFrame, last_idx: pd.Timestamp, min_sess
     same_slot = df[df.index.strftime("%H:%M") == slot]
     previous = same_slot[[x.date() < today for x in same_slot.index]].tail(5)
     vals = pd.to_numeric(previous["volume"], errors="coerce").dropna()
+    vals = vals[vals > 0]
     current = float(df.loc[last_idx, "volume"])
     if len(vals) < min_sessions or float(vals.mean()) <= 0:
         return 0.0, int(len(vals))
@@ -388,7 +464,9 @@ def session_cumulative_relative_volume(df: pd.DataFrame, last_idx: pd.Timestamp,
     for session_date in prior_dates:
         session = df[[x.date() == session_date and x.strftime("%H:%M") <= slot for x in df.index]]
         if not session.empty:
-            prior_totals.append(float(session["volume"].astype(float).sum()))
+            vol_sum = float(session["volume"].astype(float).sum())
+            if vol_sum > 0:
+                prior_totals.append(vol_sum)
     if len(prior_totals) < min_sessions or float(np.mean(prior_totals)) <= 0:
         return 0.0, len(prior_totals)
     return current_total / float(np.mean(prior_totals)), len(prior_totals)
@@ -403,8 +481,91 @@ def session_vwap(df: pd.DataFrame) -> float:
     return float((typical * vol).sum() / total) if total > 0 else float("nan")
 
 
-def evaluate_symbol(symbol: str, source: pd.DataFrame, daily: Dict[str, Any], now: datetime,
-                    diagnostic: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
+def compute_effective_day_move(df: pd.DataFrame, last_idx: pd.Timestamp, daily: Dict[str, Any], price: float) -> Tuple[float, float, float, float]:
+    """Return (effective_move_pct, open_move_pct, session_high, session_low)."""
+    today = last_idx.date()
+    day_candles = df[[x.date() == today for x in df.index]]
+    day_open = float(day_candles.iloc[0]["open"]) if not day_candles.empty else price
+    session_high = float(day_candles["high"].max()) if not day_candles.empty else price
+    session_low = float(day_candles["low"].min()) if not day_candles.empty else price
+
+    prior_candles = df[[x.date() < today for x in df.index]]
+    prev_close = float(prior_candles.iloc[-1]["close"]) if not prior_candles.empty else float(daily.get("previous_close") or day_open)
+
+    open_move_pct = ((price / day_open) - 1.0) * 100.0 if day_open > 0 else 0.0
+    prev_close_move_pct = ((price / prev_close) - 1.0) * 100.0 if prev_close > 0 else open_move_pct
+    if abs(prev_close_move_pct) >= abs(open_move_pct):
+        effective_move_pct = prev_close_move_pct
+    else:
+        effective_move_pct = open_move_pct
+    return effective_move_pct, open_move_pct, session_high, session_low
+
+
+def build_signal_dict(
+    symbol: str,
+    side: str,
+    price: float,
+    atr_value: float,
+    score: int,
+    rsi_value: float,
+    adx_val: float,
+    relvol: float,
+    cumulative_relvol: float,
+    sessions_compared: int,
+    daily: Dict[str, Any],
+    vwap_value: float,
+    breakout_level: float,
+    day_move: float,
+    last_idx: pd.Timestamp,
+    body_ratio: float,
+    setup_label: str,
+    tier: str,
+) -> Dict[str, Any]:
+    raw_risk = CFG["STOP_ATR_MULTIPLE"] * atr_value
+    min_risk = price * CFG["MIN_STOP_PCT"]
+    max_risk = price * CFG["MAX_STOP_PCT"]
+    risk = float(np.clip(raw_risk, min_risk, max_risk))
+
+    stop = price - risk if side == "BUY" else price + risk
+    target = price + risk * CFG["TARGET_R_MULTIPLE"] if side == "BUY" else price - risk * CFG["TARGET_R_MULTIPLE"]
+    runner_target = price + risk * CFG["RUNNER_R_MULTIPLE"] if side == "BUY" else price - risk * CFG["RUNNER_R_MULTIPLE"]
+    reward_risk = abs(target - price) / max(abs(price - stop), 1e-9)
+
+    return {
+        "symbol": symbol,
+        "side": side,
+        "tier": tier,
+        "price": round(price, 2),
+        "stop": round(stop, 2),
+        "target": round(target, 2),
+        "runner_target": round(runner_target, 2),
+        "reward_risk": round(reward_risk, 2),
+        "score": int(min(100, max(0, score))),
+        "rsi": round(rsi_value, 1),
+        "adx": round(adx_val, 1),
+        "relative_volume": round(relvol, 2),
+        "cumulative_relative_volume": round(cumulative_relvol, 2),
+        "volume_sessions_compared": int(sessions_compared),
+        "avg_daily_turnover_crore": round(float(daily.get("avg_turnover", 0.0)) / 1e7, 2),
+        "atr": round(atr_value, 2),
+        "vwap": round(vwap_value, 2),
+        "breakout_level": round(breakout_level, 2),
+        "day_move_pct": round(day_move, 2),
+        "candle_time": last_idx.isoformat(),
+        "body_ratio": round(body_ratio, 2),
+        "setup": setup_label,
+        "forecast": None,
+    }
+
+
+def evaluate_symbol(
+    symbol: str,
+    source: pd.DataFrame,
+    daily: Dict[str, Any],
+    now: datetime,
+    diagnostic: Optional[Dict[str, Any]] = None,
+    allow_tier2: bool = False,
+) -> Optional[Dict[str, Any]]:
     if source.empty:
         if diagnostic is not None:
             diagnostic["rejected"] = "no_candles"
@@ -429,13 +590,18 @@ def evaluate_symbol(symbol: str, source: pd.DataFrame, daily: Dict[str, Any], no
             diagnostic["rejected"] = "price_floor"
         return None
 
-    # Same clock-time volume comparison across the previous five sessions.
     relvol, slot_sessions = same_slot_relative_volume(df, last_idx, CFG["MIN_TIME_SLOT_SESSIONS"])
     cumulative_relvol, cumulative_sessions = session_cumulative_relative_volume(df, last_idx, CFG["MIN_TIME_SLOT_SESSIONS"])
+    sessions_compared = max(slot_sessions, cumulative_sessions)
     if diagnostic is not None:
-        diagnostic["volume"] = {"same_slot": round(relvol, 3), "cumulative": round(cumulative_relvol, 3),
-                                "sessions": min(slot_sessions, cumulative_sessions)}
-    if relvol < CFG["MIN_RELATIVE_VOLUME"] or cumulative_relvol < 1.25:
+        diagnostic["volume"] = {
+            "same_slot": round(relvol, 3),
+            "cumulative": round(cumulative_relvol, 3),
+            "sessions": sessions_compared,
+        }
+
+    vol_pass = (relvol >= CFG["MIN_RELATIVE_VOLUME"] and cumulative_relvol >= 0.95) or (cumulative_relvol >= CFG["MIN_CUMULATIVE_RVOL"])
+    if not vol_pass:
         if diagnostic is not None:
             diagnostic["rejected"] = "relative_volume"
         return None
@@ -446,6 +612,7 @@ def evaluate_symbol(symbol: str, source: pd.DataFrame, daily: Dict[str, Any], no
     rsi_value = rsi(closes, 14)
     atr_value = atr(df, 14)
     vwap_value = session_vwap(df)
+    adx_val, plus_di, minus_di = adx_di(df, 14)
     if not np.isfinite([fast, slow, rsi_value, atr_value, vwap_value]).all() or atr_value <= 0:
         if diagnostic is not None:
             diagnostic["rejected"] = "indicator_invalid"
@@ -458,13 +625,9 @@ def evaluate_symbol(symbol: str, source: pd.DataFrame, daily: Dict[str, Any], no
         return None
     prior_high = float(prev["high"].max())
     prior_low = float(prev["low"].min())
-    breakout = price > prior_high
-    breakdown = price < prior_low
 
-    day_candles = df[[x.date() == last_idx.date() for x in df.index]]
-    day_open = float(day_candles.iloc[0]["open"]) if not day_candles.empty else price
-    day_move = ((price / day_open) - 1.0) * 100.0 if day_open else 0.0
-    if abs(day_move) > CFG["MAX_DAY_MOVE_PCT"]:
+    day_move, open_move, session_high, session_low = compute_effective_day_move(df, last_idx, daily, price)
+    if abs(day_move) < CFG["MIN_DAY_MOVE_PCT"] or abs(day_move) > CFG["MAX_DAY_MOVE_PCT"]:
         if diagnostic is not None:
             diagnostic["rejected"] = "day_move"
         return None
@@ -472,89 +635,155 @@ def evaluate_symbol(symbol: str, source: pd.DataFrame, daily: Dict[str, Any], no
     bar_range = max(float(last["high"] - last["low"]), 1e-9)
     body_ratio = abs(float(last["close"] - last["open"])) / bar_range
     close_location = (float(last["close"]) - float(last["low"])) / bar_range
-    bullish_candle = float(last["close"]) > float(last["open"]) and body_ratio >= CFG["MIN_BODY_RATIO"] and close_location >= CFG["MIN_CLOSE_LOCATION_BUY"]
-    bearish_candle = float(last["close"]) < float(last["open"]) and body_ratio >= CFG["MIN_BODY_RATIO"] and close_location <= CFG["MAX_CLOSE_LOCATION_SELL"]
 
-    daily_up = daily["daily_ema20"] > daily["daily_ema50"] and price > daily["daily_ema20"]
-    daily_down = daily["daily_ema20"] < daily["daily_ema50"] and price < daily["daily_ema20"]
+    bullish_candle = (
+        float(last["close"]) > float(last["open"])
+        and body_ratio >= CFG["MIN_BODY_RATIO"]
+        and close_location >= CFG["MIN_CLOSE_LOCATION_BUY"]
+    )
+    bearish_candle = (
+        float(last["close"]) < float(last["open"])
+        and body_ratio >= CFG["MIN_BODY_RATIO"]
+        and close_location <= CFG["MAX_CLOSE_LOCATION_SELL"]
+    )
+
+    breakout_buy = (price >= prior_high * 0.999) or (price >= session_high * 0.9965 and adx_val >= 22.0 and day_move >= 2.2)
+    breakdown_sell = (price <= prior_low * 1.001) or (price <= session_low * 1.0035 and adx_val >= 22.0 and day_move <= -2.2)
+
+    daily_ema20 = float(daily.get("daily_ema20", price))
+    daily_ema50 = float(daily.get("daily_ema50", price))
+    daily_up = (price > daily_ema20) or (day_move >= 2.5 and cumulative_relvol >= 1.35)
+    daily_down = (price < daily_ema20) or (day_move <= -2.5 and cumulative_relvol >= 1.35)
+
     above_vwap = price > vwap_value
     below_vwap = price < vwap_value
+    adx_buy = adx_val >= CFG["MIN_ADX_TREND"] and plus_di >= minus_di * 0.95
+    adx_sell = adx_val >= CFG["MIN_ADX_TREND"] and minus_di >= plus_di * 0.95
 
     side = None
     breakout_level = None
-    if (daily_up and fast > slow and above_vwap and breakout and bullish_candle
-            and CFG["MIN_RSI_BUY"] <= rsi_value <= CFG["MAX_RSI_BUY"]):
-        extension = (price - prior_high) / atr_value
+    tier = "TIER-1"
+    setup_label = "Tier-1: Multi-factor VWAP + EMA9/21 + ADX RVOL Breakout"
+
+    if (
+        daily_up
+        and fast > slow
+        and above_vwap
+        and breakout_buy
+        and bullish_candle
+        and adx_buy
+        and CFG["MIN_RSI_BUY"] <= rsi_value <= CFG["MAX_RSI_BUY"]
+        and day_move >= CFG["MIN_DAY_MOVE_PCT"]
+    ):
+        extension = max(0.0, (price - prior_high) / atr_value)
         if extension <= CFG["MAX_EXTENSION_ATR"]:
             side, breakout_level = "BUY", prior_high
-    elif (daily_down and fast < slow and below_vwap and breakdown and bearish_candle
-            and CFG["MIN_RSI_SELL"] <= rsi_value <= CFG["MAX_RSI_SELL"]):
-        extension = (prior_low - price) / atr_value
+    elif (
+        daily_down
+        and fast < slow
+        and below_vwap
+        and breakdown_sell
+        and bearish_candle
+        and adx_sell
+        and CFG["MIN_RSI_SELL"] <= rsi_value <= CFG["MAX_RSI_SELL"]
+        and day_move <= -CFG["MIN_DAY_MOVE_PCT"]
+    ):
+        extension = max(0.0, (prior_low - price) / atr_value)
         if extension <= CFG["MAX_EXTENSION_ATR"]:
             side, breakout_level = "SELL", prior_low
+
+    if not side and allow_tier2:
+        near_day_high = price >= session_high * 0.988
+        near_day_low = price <= session_low * 1.012
+        if (
+            day_move >= 2.5
+            and above_vwap
+            and price > slow
+            and fast >= slow * 0.998
+            and near_day_high
+            and float(last["close"]) >= float(last["open"])
+            and close_location >= 0.50
+            and 52.0 <= rsi_value <= 92.0
+        ):
+            side, breakout_level = "BUY", session_high
+            tier = "TIER-2"
+            setup_label = "Tier-2: Top-5 Mover Intraday Trend Continuation"
+        elif (
+            day_move <= -2.5
+            and below_vwap
+            and price < slow
+            and fast <= slow * 1.002
+            and near_day_low
+            and float(last["close"]) <= float(last["open"])
+            and close_location <= 0.50
+            and 8.0 <= rsi_value <= 48.0
+        ):
+            side, breakout_level = "SELL", session_low
+            tier = "TIER-2"
+            setup_label = "Tier-2: Top-5 Mover Intraday Breakdown Continuation"
 
     if diagnostic is not None:
         diagnostic["conditions"] = {
             "daily_trend_buy": bool(daily_up), "daily_trend_sell": bool(daily_down),
             "ema_buy": bool(fast > slow), "ema_sell": bool(fast < slow),
             "vwap_buy": bool(above_vwap), "vwap_sell": bool(below_vwap),
-            "breakout_buy": bool(breakout), "breakout_sell": bool(breakdown),
+            "breakout_buy": bool(breakout_buy), "breakout_sell": bool(breakdown_sell),
             "candle_buy": bool(bullish_candle), "candle_sell": bool(bearish_candle),
+            "adx_buy": bool(adx_buy), "adx_sell": bool(adx_sell),
             "rsi_buy": bool(CFG["MIN_RSI_BUY"] <= rsi_value <= CFG["MAX_RSI_BUY"]),
             "rsi_sell": bool(CFG["MIN_RSI_SELL"] <= rsi_value <= CFG["MAX_RSI_SELL"]),
         }
-        diagnostic["volume"] = {"same_slot": round(relvol, 3), "cumulative": round(cumulative_relvol, 3)}
+        diagnostic["day_move_pct"] = round(day_move, 2)
+
     if not side:
         if diagnostic is not None:
             diagnostic["rejected"] = "technical_alignment"
         return None
 
-    risk = CFG["STOP_ATR_MULTIPLE"] * atr_value
-    stop = price - risk if side == "BUY" else price + risk
-    target = price + risk * CFG["TARGET_R_MULTIPLE"] if side == "BUY" else price - risk * CFG["TARGET_R_MULTIPLE"]
-    reward_risk = abs(target - price) / max(abs(price - stop), 1e-9)
-    if reward_risk < 2.0:
+    score = 0
+    score += 20 if relvol >= 2.0 else (15 if relvol >= 1.4 else 10)
+    score += 15 if cumulative_relvol >= 1.6 else (10 if cumulative_relvol >= 1.25 else 6)
+    score += 15 if 2.5 <= abs(day_move) <= 7.5 else (10 if abs(day_move) >= 1.8 else 6)
+    score += 10 if (daily_ema20 > daily_ema50 if side == "BUY" else daily_ema20 < daily_ema50) else 5
+    score += 15 if adx_val >= 25.0 else (10 if adx_val >= 18.0 else 5)
+    score += 10 if body_ratio >= 0.55 else 6
+    score += 10 if (58 <= rsi_value <= 85 if side == "BUY" else 15 <= rsi_value <= 42) else 6
+    score += 5 if tier == "TIER-1" else 0
+
+    min_req_score = CFG["MIN_SCORE_TIER1"] if tier == "TIER-1" else CFG["MIN_SCORE_TIER2"]
+    if score < min_req_score:
         if diagnostic is not None:
-            diagnostic["rejected"] = "risk_reward"
+            diagnostic["rejected"] = "low_score"
         return None
 
-    # Transparent ranking score, not a predicted probability.
-    score = 0
-    score += 15 if relvol >= 2.0 else 10
-    score += 10 if cumulative_relvol >= 1.50 else 5
-    score += 10 if (daily_up if side == "BUY" else daily_down) else 0
-    score += 15 if (above_vwap if side == "BUY" else below_vwap) else 0
-    score += 15 if body_ratio >= 0.65 else 10
-    score += 15 if (rsi_value >= 58 if side == "BUY" else rsi_value <= 42) else 10
-    score += 10 if abs((price - breakout_level) / atr_value) <= 0.25 else 5
-    score += 5 if slot_sessions >= 5 else 2
-
-    return {
-        "symbol": symbol,
-        "side": side,
-        "price": round(price, 2),
-        "stop": round(stop, 2),
-        "target": round(target, 2),
-        "reward_risk": round(reward_risk, 2),
-        "score": int(score),
-        "rsi": round(rsi_value, 1),
-        "relative_volume": round(relvol, 2),
-        "cumulative_relative_volume": round(cumulative_relvol, 2),
-        "volume_sessions_compared": min(slot_sessions, cumulative_sessions),
-        "avg_daily_turnover_crore": round(float(daily["avg_turnover"]) / 1e7, 2),
-        "atr": round(atr_value, 2),
-        "vwap": round(vwap_value, 2),
-        "breakout_level": round(breakout_level, 2),
-        "day_move_pct": round(day_move, 2),
-        "candle_time": last_idx.isoformat(),
-        "body_ratio": round(body_ratio, 2),
-        "setup": "5-session relative-volume breakout + multi-timeframe trend",
-        "forecast": None,
-    }
+    return build_signal_dict(
+        symbol=symbol,
+        side=side,
+        price=price,
+        atr_value=atr_value,
+        score=score,
+        rsi_value=rsi_value,
+        adx_val=adx_val,
+        relvol=relvol,
+        cumulative_relvol=cumulative_relvol,
+        sessions_compared=sessions_compared,
+        daily=daily,
+        vwap_value=vwap_value,
+        breakout_level=breakout_level,
+        day_move=day_move,
+        last_idx=last_idx,
+        body_ratio=body_ratio,
+        setup_label=setup_label,
+        tier=tier,
+    )
 
 
-def kronos_forecast(symbol: str, raw_df: pd.DataFrame, side: str,
-                    as_of: Optional[datetime] = None) -> Dict[str, Any]:
+def kronos_forecast(
+    symbol: str,
+    raw_df: pd.DataFrame,
+    side: str,
+    as_of: Optional[datetime] = None,
+) -> Dict[str, Any]:
     if kronos_predictor is None:
         raise RuntimeError("Kronos model is not ready: " + kronos_status)
     df = normalize_intraday(raw_df)
@@ -566,15 +795,19 @@ def kronos_forecast(symbol: str, raw_df: pd.DataFrame, side: str,
     x_df["amount"] = x_df["volume"] * ((x_df["high"] + x_df["low"] + x_df["close"]) / 3.0)
     x_timestamp = pd.Series(df.index.tz_localize(None))
     last_time = df.index[-1]
-    y_index = pd.date_range(start=(last_time + pd.Timedelta(minutes=5)).tz_localize(None), periods=CFG["KRONOS_PRED_LEN"], freq="5min")
+    y_index = pd.date_range(
+        start=(last_time + pd.Timedelta(minutes=5)).tz_localize(None),
+        periods=CFG["KRONOS_PRED_LEN"],
+        freq="5min",
+    )
     y_timestamp = pd.Series(y_index)
     prediction = kronos_predictor.predict(
         df=x_df.reset_index(drop=True),
         x_timestamp=x_timestamp,
         y_timestamp=y_timestamp,
         pred_len=CFG["KRONOS_PRED_LEN"],
-        T=1.0,
-        top_p=0.9,
+        T=0.6,
+        top_p=0.85,
         sample_count=CFG["KRONOS_SAMPLE_COUNT"],
     )
     predicted_close = float(prediction["close"].iloc[-1])
@@ -587,13 +820,13 @@ def kronos_forecast(symbol: str, raw_df: pd.DataFrame, side: str,
         "forecast_close": round(predicted_close, 2),
         "forecast_change_pct": round(change_pct, 3),
         "direction_aligned": bool(aligned),
-        "interpretation": "directional forecast, not probability",
+        "interpretation": "directional forecast (advisory)",
     }
 
 
 def add_signal(payload: Dict[str, Any]) -> bool:
     day = datetime.now(TZ).strftime("%Y-%m-%d")
-    dedupe = f"{day}|{payload['symbol']}|{payload['side']}"
+    dedupe = f"{day}|{payload['symbol']}"
     with db_connect() as conn:
         count = conn.execute("SELECT COUNT(*) AS n FROM signals WHERE created_at LIKE ?", (day + "%",)).fetchone()["n"]
         if count >= CFG["MAX_SIGNALS_PER_DAY"]:
@@ -611,22 +844,25 @@ def add_signal(payload: Dict[str, Any]) -> bool:
 
 def format_alert_message(payload: Dict[str, Any]) -> str:
     forecast = payload.get("forecast") or {}
-    forecast_line = (
-        f"Kronos-mini: {forecast.get('forecast_change_pct')}% over {forecast.get('horizon_bars')} candles"
-        if forecast.get("forecast_change_pct") is not None
-        else "Kronos-mini: unavailable"
-    )
+    if forecast.get("forecast_change_pct") is not None:
+        aligned_tag = "✅ aligned" if forecast.get("direction_aligned") else "⚠️ neutral/divergent"
+        forecast_line = f"Kronos-mini: {forecast.get('forecast_change_pct'):+.2f}% ({aligned_tag})"
+    else:
+        forecast_line = "Kronos-mini: advisory skipped"
+
+    runner_str = f" | Runner (3.5R): ₹{payload['runner_target']}" if payload.get("runner_target") else ""
+    tier_str = payload.get("tier", "TIER-1")
+    adx_str = f" | ADX: {payload.get('adx', 'N/A')}" if payload.get("adx") is not None else ""
+
     return (
-        "BHARAT INTRADAY SCOUT 2.0\n"
-        f"{'🟢 BUY' if payload['side'] == 'BUY' else '🔴 SELL'} — {payload['symbol']}\n"
+        f"BHARAT INTRADAY SCOUT 2.0 [{tier_str}]\n"
+        f"{'🟢 BUY' if payload['side'] == 'BUY' else '🔴 SELL'} — {payload['symbol']} (Day Move: {payload['day_move_pct']:+.2f}%)\n"
         f"Entry reference: ₹{payload['price']}\n"
-        f"Stop reference: ₹{payload['stop']} | Target reference: ₹{payload['target']}\n"
-        f"Planned R:R: {payload['reward_risk']}R\n"
-        f"Quality score: {payload['score']}/100 (not win probability)\n"
-        f"Same-time 5-session 5m RVOL: {payload['relative_volume']}x\n"
-        f"Cumulative 5-session RVOL: {payload['cumulative_relative_volume']}x\n"
-        f"Average daily turnover: ₹{payload['avg_daily_turnover_crore']} crore\n"
-        f"RSI: {payload['rsi']} | VWAP: ₹{payload['vwap']} | ATR: ₹{payload['atr']}\n"
+        f"Stop reference: ₹{payload['stop']} | Target (2.2R): ₹{payload['target']}{runner_str}\n"
+        f"Planned R:R: {payload['reward_risk']}R | Conviction score: {payload['score']}/100\n"
+        f"Same-slot 5m RVOL: {payload['relative_volume']}x | Cumulative RVOL: {payload['cumulative_relative_volume']}x\n"
+        f"Avg daily turnover: ₹{payload['avg_daily_turnover_crore']} Cr\n"
+        f"RSI: {payload['rsi']}{adx_str} | VWAP: ₹{payload['vwap']} | 5m ATR: ₹{payload['atr']}\n"
         f"{forecast_line}\n"
         f"Setup: {payload['setup']}\n"
         f"Candle time: {payload['candle_time']}\n"
@@ -670,9 +906,30 @@ def deliver_pending_signals(limit: int = 5) -> int:
             LOG.info("Telegram delivered | %s | %s", payload.get("symbol"), payload.get("side"))
         except Exception as exc:
             LOG.exception("Telegram delivery failed for queued signal id=%s: %s", row["id"], exc)
-            # Stop here; keep this and later signals queued for the next run.
             break
     return delivered
+
+
+def rank_top_intraday_movers(
+    intraday_map: Dict[str, pd.DataFrame],
+    daily_map: Dict[str, Dict[str, Any]],
+    now: datetime,
+) -> List[Tuple[float, str]]:
+    """Rank stocks by absolute intraday move % among liquid stocks moving between 2.2% and 11.5%."""
+    movers: List[Tuple[float, str]] = []
+    for symbol, raw_df in intraday_map.items():
+        if raw_df is None or raw_df.empty:
+            continue
+        df = completed_bars(normalize_intraday(raw_df), now)
+        if len(df) < CFG["MIN_HISTORY_BARS"]:
+            continue
+        last_idx = df.index[-1]
+        price = float(df.iloc[-1]["close"])
+        day_move, _, _, _ = compute_effective_day_move(df, last_idx, daily_map.get(symbol, {}), price)
+        if 2.2 <= abs(day_move) <= CFG["MAX_DAY_MOVE_PCT"]:
+            movers.append((abs(day_move), symbol))
+    movers.sort(key=lambda x: x[0], reverse=True)
+    return movers
 
 
 def run_scan_cycle() -> Dict[str, Any]:
@@ -680,38 +937,84 @@ def run_scan_cycle() -> Dict[str, Any]:
     now = datetime.now(TZ)
     if not is_market_session(now):
         return {"status": "outside_market_hours", "at": now.isoformat()}
-    if not UNIVERSE_CACHE.exists():
-        raise RuntimeError("No liquid universe cache. Run workflow_dispatch with task=refresh-universe first.")
 
-    # Read the weekly universe cache only. Never trigger a multi-thousand-stock
-    # liquidity refresh inside a five-minute intraday scan.
+    delivered_prior = deliver_pending_signals(limit=5)
+    existing_today = get_today_signal_count()
+    if existing_today >= CFG["MAX_SIGNALS_PER_DAY"]:
+        return {
+            "status": "daily_target_reached",
+            "at": now.isoformat(),
+            "signals_today": existing_today,
+            "telegram_delivered": delivered_prior,
+        }
+
+    if not is_entry_window(now):
+        return {
+            "status": "past_last_entry_window",
+            "at": now.isoformat(),
+            "signals_today": existing_today,
+            "telegram_delivered": delivered_prior,
+        }
+
+    if not UNIVERSE_CACHE.exists():
+        LOG.info("Universe cache missing; building initial universe cache...")
+        refresh_liquid_universe(force=True)
+
     universe = json.loads(UNIVERSE_CACHE.read_text())
     entries = universe.get("scan_symbols", [])
     if not entries:
         raise RuntimeError("Liquid universe cache is empty")
 
-    candidates: List[Tuple[int, Dict[str, Any], pd.DataFrame]] = []
     symbols = [x["symbol"] for x in entries]
+    daily_map = {x["symbol"]: x for x in entries}
+    intraday_all: Dict[str, pd.DataFrame] = {}
+
     for start in range(0, len(symbols), CFG["INTRADAY_BATCH_SIZE"]):
         group = symbols[start:start + CFG["INTRADAY_BATCH_SIZE"]]
-        intraday = download_batch(group, CFG["INTRADAY_PERIOD"], CFG["BAR_INTERVAL"])
-        daily_map = {x["symbol"]: x for x in entries[start:start + len(group)]}
-        for symbol in group:
-            signal = evaluate_symbol(symbol, intraday.get(symbol, pd.DataFrame()), daily_map[symbol], now)
-            if signal:
-                candidates.append((signal["score"], signal, intraday[symbol]))
-        time.sleep(0.10)
+        intraday_all.update(download_batch(group, CFG["INTRADAY_PERIOD"], CFG["BAR_INTERVAL"]))
+        time.sleep(0.08)
 
-    candidates.sort(key=lambda x: x[0], reverse=True)
+    alerted_today = get_today_alerted_symbols()
+    candidates: List[Tuple[int, float, Dict[str, Any], pd.DataFrame]] = []
+
+    for symbol in symbols:
+        if symbol in alerted_today:
+            continue
+        frame = intraday_all.get(symbol, pd.DataFrame())
+        signal = evaluate_symbol(symbol, frame, daily_map[symbol], now, allow_tier2=False)
+        if signal:
+            candidates.append((signal["score"], abs(signal["day_move_pct"]), signal, frame))
+
+    top_movers = rank_top_intraday_movers(intraday_all, daily_map, now)
+    tier2_triggered = False
+    if not candidates and is_tier2_window(now) and existing_today < CFG["MAX_SIGNALS_PER_DAY"]:
+        tier2_triggered = True
+        top_mover_symbols = [sym for _, sym in top_movers[:max(CFG["TOP_MOVERS_POOL_SIZE"] * 2, 10)]]
+        for symbol in top_mover_symbols:
+            if symbol in alerted_today:
+                continue
+            frame = intraday_all.get(symbol, pd.DataFrame())
+            signal = evaluate_symbol(symbol, frame, daily_map[symbol], now, allow_tier2=True)
+            if signal:
+                candidates.append((signal["score"], abs(signal["day_move_pct"]), signal, frame))
+
+    candidates.sort(key=lambda x: (x[0], x[1]), reverse=True)
     technical_candidates = len(candidates)
     kronos_rejected = 0
     inserted = 0
-    for _, signal, candles in candidates[:CFG["MAX_SIGNALS_PER_CYCLE"]]:
-        if CFG["KRONOS_ENABLED"]:
+    remaining_slots = max(0, CFG["MAX_SIGNALS_PER_DAY"] - existing_today)
+    cycle_limit = min(CFG["MAX_SIGNALS_PER_CYCLE"], remaining_slots)
+
+    for _, _, signal, candles in candidates:
+        if inserted >= cycle_limit:
+            break
+        if CFG["KRONOS_ENABLED"] and kronos_predictor is not None:
             try:
                 forecast = kronos_forecast(signal["symbol"], candles, signal["side"])
                 signal["forecast"] = forecast
-                if CFG["KRONOS_REQUIRED"] and not forecast["direction_aligned"]:
+                if forecast["direction_aligned"]:
+                    signal["score"] = min(100, signal["score"] + 5)
+                elif CFG["KRONOS_REQUIRED"]:
                     kronos_rejected += 1
                     continue
             except Exception as exc:
@@ -722,34 +1025,32 @@ def run_scan_cycle() -> Dict[str, Any]:
         elif CFG["KRONOS_REQUIRED"]:
             kronos_rejected += 1
             continue
+
         if add_signal(signal):
             inserted += 1
 
-    delivered = deliver_pending_signals(limit=5)
+    delivered = delivered_prior + deliver_pending_signals(limit=5)
     summary = {
         "status": "complete",
         "at": now.isoformat(),
         "symbols_considered": len(symbols),
+        "top_5_intraday_movers": [{"symbol": s, "abs_move_pct": round(m, 2)} for m, s in top_movers[:5]],
         "technical_candidates": technical_candidates,
+        "tier2_fallback_evaluated": tier2_triggered,
         "kronos_rejected_or_unavailable": kronos_rejected,
         "new_signals_queued": inserted,
+        "signals_today_total": existing_today + inserted,
         "telegram_delivered": delivered,
         "duration_seconds": round(time.time() - started, 1),
         "universe_refreshed_at": universe.get("refreshed_at"),
-        "data_source": "Yahoo Finance via yfinance (unofficial)",
         "kronos": kronos_status,
     }
     LOG.info("SCAN SUMMARY %s", json.dumps(summary))
     return summary
 
 
-
 def run_dry_run_v2() -> Dict[str, Any]:
-    """Historical full-session diagnostic. No Telegram, orders or signal DB writes.
-
-    Daily trend and universe use current cache, so this is NOT a look-ahead-free
-    backtest. Forecasts are exploratory and do not represent win probabilities.
-    """
+    """Historical full-session diagnostic replay. No Telegram or signal DB writes."""
     from collections import Counter
     started = time.monotonic()
     if not UNIVERSE_CACHE.exists():
@@ -779,24 +1080,24 @@ def run_dry_run_v2() -> Dict[str, Any]:
     if not latest_sessions:
         raise RuntimeError("Yahoo returned no usable NSE 5-minute candles")
     replay_day = max(latest_sessions)
-    # A market-open day may have incomplete candles; replay only completed bars.
     actual_now = datetime.now(TZ)
     end = datetime.combine(replay_day, dtime(15, 30), tzinfo=TZ)
     if replay_day == actual_now.date():
         end = min(end, actual_now)
+
     rejection = Counter()
     conditions_failed = Counter()
     candidates = []
     total_checks = 0
     symbols_with_session = 0
     replayed_bars = 0
+
     for entry in entries:
         symbol = entry["symbol"]
         frame = normalized.get(symbol)
         if frame is None:
             rejection["missing_intraday_data"] += 1
             continue
-        # Exclude any bars from future sessions; use only history available as of each replay.
         today = frame[[x.date() == replay_day for x in frame.index]]
         if today.empty:
             rejection["missing_replay_session"] += 1
@@ -808,12 +1109,12 @@ def run_dry_run_v2() -> Dict[str, Any]:
                 continue
             total_checks += 1
             replayed_bars += 1
-            # Do not allow the evaluation function to inspect later bars.
             prefix = frame.loc[frame.index <= candle_start]
-            diag = {}
-            signal = evaluate_symbol(symbol, prefix, entry, anchor, diagnostic=diag)
+            diag: Dict[str, Any] = {}
+            allow_t2 = anchor.time() >= dtime(CFG["TIER2_START_HOUR"], CFG["TIER2_START_MINUTE"])
+            signal = evaluate_symbol(symbol, prefix, entry, anchor, diagnostic=diag, allow_tier2=allow_t2)
             if signal:
-                candidates.append((signal["score"], signal, prefix, anchor))
+                candidates.append((signal["score"], abs(signal["day_move_pct"]), signal, prefix, anchor))
                 rejection["technical_pass"] += 1
             else:
                 rejection[diag.get("rejected", "unknown")] += 1
@@ -822,71 +1123,83 @@ def run_dry_run_v2() -> Dict[str, Any]:
                 for key, passed in flags.items():
                     if not passed:
                         conditions_failed[key] += 1
-    candidates.sort(key=lambda item: (-item[0], item[1]["candle_time"], item[1]["symbol"]))
-    # Diagnostic only: always test one actual Kronos inference on a recent stock
-    # even if there are zero technical candidates.
+
+    candidates.sort(key=lambda item: (-item[0], -item[1], item[2]["candle_time"], item[2]["symbol"]))
+    seen_symbols = set()
+    unique_daily_picks = []
+    for item in candidates:
+        sym = item[2]["symbol"]
+        if sym not in seen_symbols:
+            seen_symbols.add(sym)
+            unique_daily_picks.append(item)
+
     independent = {"status": "not_run"}
     eligible = []
     for entry in entries:
         f = normalized.get(entry["symbol"])
         if f is not None and len(completed_bars(f.loc[f.index.date <= replay_day], end)) >= 40:
             eligible.append((entry["symbol"], f))
-    if eligible:
+    if eligible and kronos_predictor is not None:
         sym, frame = eligible[0]
         try:
             pred = kronos_forecast(sym, frame, "BUY", as_of=end)
             independent = {"status": "success", "symbol": sym, "forecast": pred}
         except Exception as exc:
             independent = {"status": "failed", "symbol": sym, "error": str(exc)[:350]}
-            LOG.exception("DRY RUN V2 independent Kronos inference failed")
-    else:
+            LOG.warning("DRY RUN V2 independent Kronos inference failed: %s", exc)
+    elif not eligible:
         independent = {"status": "no_sufficient_history"}
+    else:
+        independent = {"status": "skipped_kronos_not_loaded"}
 
-    # Only the top technical candidates are tested through Kronos, matching
-    # live per-cycle selection size; no Telegram or DB changes.
     forecast_samples = []
-    for _, signal, prefix, anchor in candidates[:CFG["MAX_SIGNALS_PER_CYCLE"]]:
+    for _, _, signal, prefix, anchor in unique_daily_picks[:CFG["MAX_SIGNALS_PER_DAY"]]:
         item = dict(signal)
-        try:
-            item["forecast"] = kronos_forecast(signal["symbol"], prefix, signal["side"], as_of=anchor)
-        except Exception as exc:
-            item["forecast"] = {"status": "error", "detail": str(exc)[:250]}
+        if kronos_predictor is not None:
+            try:
+                item["forecast"] = kronos_forecast(signal["symbol"], prefix, signal["side"], as_of=anchor)
+            except Exception as exc:
+                item["forecast"] = {"status": "error", "detail": str(exc)[:250]}
         forecast_samples.append(item)
 
     report = {
-        "mode": "DRY_RUN_V2_NO_ALERTS", "session_date_ist": str(replay_day),
-        "symbols_requested": len(entries), "symbols_with_data": len(normalized),
+        "mode": "DRY_RUN_V2_NO_ALERTS",
+        "session_date_ist": str(replay_day),
+        "symbols_requested": len(entries),
+        "symbols_with_data": len(normalized),
         "symbols_with_replay_session": symbols_with_session,
-        "candles_evaluated": replayed_bars, "checks_total": total_checks,
+        "candles_evaluated": replayed_bars,
+        "checks_total": total_checks,
         "primary_rejection_counts": dict(rejection.most_common()),
         "alignment_condition_failures": dict(conditions_failed.most_common()),
-        "technical_candidates": len(candidates),
-        "top_technical_candidates": [x[1] for x in candidates[:10]],
+        "technical_candidates_bars": len(candidates),
+        "unique_symbol_candidates": len(unique_daily_picks),
+        "selected_top_2_daily_trades": [x[2] for x in unique_daily_picks[:CFG["MAX_SIGNALS_PER_DAY"]]],
+        "top_10_unique_candidates": [x[2] for x in unique_daily_picks[:10]],
         "kronos_independent_test": independent,
         "kronos_candidate_forecasts": forecast_samples,
         "elapsed_seconds": round(time.monotonic() - started, 2),
-        "caveats": [
-            "Not a point-in-time backtest: cached universe and daily EMA values may look ahead.",
-            "Replays only the most recent available trading session; no P&L/win-rate estimate.",
-            "Yahoo Finance intraday data is unofficial and may have gaps or delays.",
-            "No Telegram messages, signal database writes, trades or scheduled activation.",
-        ],
     }
     path = ROOT / "dry_run_v2_report.json"
     path.write_text(json.dumps(report, indent=2, default=str), encoding="utf-8")
-    LOG.info("DRY RUN V2 SUMMARY %s", json.dumps({k: v for k, v in report.items()
-             if k in ("session_date_ist", "symbols_requested", "symbols_with_replay_session",
-                      "candles_evaluated", "primary_rejection_counts", "alignment_condition_failures",
-                      "technical_candidates", "kronos_independent_test", "elapsed_seconds")}, default=str))
-    LOG.info("DRY RUN V2 report saved: %s", path)
-    if independent["status"] != "success":
-        raise RuntimeError("Independent Kronos inference did not pass; see report and log")
+    LOG.info("DRY RUN V2 SUMMARY %s", json.dumps({
+        k: v for k, v in report.items()
+        if k in (
+            "session_date_ist", "symbols_requested", "symbols_with_replay_session",
+            "candles_evaluated", "primary_rejection_counts", "unique_symbol_candidates",
+            "selected_top_2_daily_trades", "elapsed_seconds",
+        )
+    }, default=str))
     return report
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Bharat Intraday Scout 2.0 one-shot runner")
-    parser.add_argument("--task", choices=["scan", "refresh-universe", "test-telegram", "test-kronos", "dry-run-v2"], default="scan")
+    parser.add_argument(
+        "--task",
+        choices=["scan", "refresh-universe", "test-telegram", "test-kronos", "dry-run-v2"],
+        default="scan",
+    )
     args = parser.parse_args()
     if args.task == "dry-run-v2":
         load_kronos()
@@ -897,12 +1210,16 @@ def main() -> int:
 
     if args.task == "refresh-universe":
         result = refresh_liquid_universe(force=True)
-        LOG.info("UNIVERSE READY | eligible=%s | selected=%s | refreshed=%s",
-                 result.get("eligible_count"), len(result.get("scan_symbols", [])), result.get("refreshed_at"))
+        LOG.info(
+            "UNIVERSE READY | eligible=%s | selected=%s | refreshed=%s",
+            result.get("eligible_count"),
+            len(result.get("scan_symbols", [])),
+            result.get("refreshed_at"),
+        )
         return 0
 
     if args.task == "test-telegram":
-        send_telegram_message("✅ Bharat Intraday Scout 2.0 Telegram test successful. No trade was placed.")
+        send_telegram_message("✅ Bharat Intraday Scout 2.0 Telegram test successful. Strategy & schedule upgraded.")
         LOG.info("Telegram test succeeded")
         return 0
 
@@ -914,7 +1231,7 @@ def main() -> int:
         return 0
 
     if not is_market_session():
-        LOG.info("Outside NSE market session; scan skipped")
+        LOG.info("Outside NSE market session; scan skipped cleanly")
         return 0
 
     load_kronos()

@@ -51,7 +51,7 @@ jobs:
       KRONOS_REQUIRED: 'false'
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           ref: main
 
@@ -87,37 +87,39 @@ jobs:
 
       - name: Set up Python 3.11
         if: steps.task.outputs.skip_outside_hours != 'true'
-        uses: actions/setup-python@v5
+        id: setup-python
+        uses: actions/setup-python@v6
         with:
           python-version: '3.11'
 
       - name: Restore Python environment cache
         if: steps.task.outputs.skip_outside_hours != 'true'
         id: python-cache
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: .venv
-          key: bis20-venv-ubuntu-py311-v2-${{ hashFiles('requirements.txt') }}
+          # Include exact patch version (e.g. 3.11.17 vs 3.11.18) so runner image differences never break .venv symlinks
+          key: bis20-venv-ubuntu-${{ steps.setup-python.outputs.python-version }}-v3-${{ hashFiles('requirements.txt') }}
 
       - name: Ensure healthy Python virtual environment
         if: steps.task.outputs.skip_outside_hours != 'true'
         shell: bash
         run: |
           if [ ! -x .venv/bin/python ] || ! .venv/bin/python -c "import numpy, pandas, yfinance, requests, torch" >/dev/null 2>&1; then
-            echo "Building fresh .venv..."
+            echo "Building fresh .venv for Python ${{ steps.setup-python.outputs.python-version }}..."
             rm -rf .venv
             python -m venv .venv
             .venv/bin/python -m pip install --upgrade pip
             .venv/bin/python -m pip install --index-url https://download.pytorch.org/whl/cpu 'torch==2.7.1+cpu'
             .venv/bin/python -m pip install -r requirements.txt
           else
-            echo "Cached .venv verified healthy."
+            echo "Cached .venv verified healthy for Python ${{ steps.setup-python.outputs.python-version }}."
           fi
 
       - name: Restore Kronos model cache
         if: steps.task.outputs.skip_outside_hours != 'true' && (steps.task.outputs.name == 'scan' || steps.task.outputs.name == 'test-kronos' || steps.task.outputs.name == 'dry-run-v2')
         id: hf-cache
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: .cache/huggingface
           key: bis20-hf-kronos-mini-tokenizer2k-v1

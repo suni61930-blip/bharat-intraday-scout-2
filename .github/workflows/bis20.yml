@@ -2,27 +2,27 @@ name: Bharat Intraday Scout 2.0
 
 on:
   schedule:
-    # Weekly NSE equity universe/liquidity refresh: Sunday 08:30 IST = 03:00 UTC.
-    - cron: '0 3 * * 0'
-    # Weekday market scans: 09:20-09:25 IST (03:50-03:55 UTC), 09:30-15:25 IST (04:00-09:55 UTC), and 15:30 IST (10:00 UTC).
-    - cron: '50,55 3 * * 1-5'
-    - cron: '*/5 4-9 * * 1-5'
-    - cron: '0 10 * * 1-5'
+    # Weekly universe refresh: Sunday 08:17 IST (= 02:47 UTC). Off-peak minute on purpose.
+    - cron: '47 2 * * 0'
+    # Market scans, every 10 minutes, 09:47-14:37 IST (= 04:17-09:07 UTC), weekdays.
+    # Odd minutes (not :00/:05) because GitHub drops/delays cron jobs at busy marks.
+    - cron: '17,27,37,47,57 4 * * 1-5'
+    - cron: '7,17,27,37,47,57 5-8 * * 1-5'
+    - cron: '7 9 * * 1-5'
   workflow_dispatch:
     inputs:
       task:
-        description: 'Choose a manual task'
+        description: 'Manual task (an external scheduler should send: scan)'
         required: true
         type: choice
         default: scan
         options:
           - scan
-          - dry-run-v2
-          - refresh-universe
           - test-telegram
+          - refresh-universe
+          - dry-run-v2
           - test-kronos
 
-# Prevent two runs from mutating SQLite state simultaneously.
 concurrency:
   group: bis20-main-runner
   cancel-in-progress: false
@@ -32,30 +32,32 @@ permissions:
 
 jobs:
   run-scanner:
-    # Enabled by default! Set repository variable BIS_SCANNER_ENABLED='false' only if you want to pause scheduled runs.
-    if: github.event_name != 'schedule' || vars.BIS_SCANNER_ENABLED != 'false'
+    # Timed schedules only run when repo variable BIS_SCANNER_ENABLED=true.
+    if: github.event_name != 'schedule' || vars.BIS_SCANNER_ENABLED == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 8
+    timeout-minutes: 7
     env:
       PYTHONUNBUFFERED: '1'
-      HF_HOME: ${{ github.workspace }}/.cache/huggingface
-      HF_HUB_DISABLE_PROGRESS_BARS: '1'
       TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
       TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-      PRICE_FLOOR: '50'
-      MIN_AVG_TURNOVER_INR: '50000000'
-      INTRADAY_UNIVERSE_SIZE: '200'
+      # ---- strategy knobs ----
+      MOVER_MIN_PCT: '10'          # stock must be >= 10% from previous close
+      MOVER_RELAXED_PCT: '7'       # used after 11:30 IST only if no alert sent yet today
       MAX_SIGNALS_PER_DAY: '2'
-      MAX_SIGNALS_PER_CYCLE: '2'
-      KRONOS_ENABLED: 'true'
+      MIN_SCORE: '60'
+      INTRADAY_UNIVERSE_SIZE: '600'
+      MIN_AVG_TURNOVER_INR: '50000000'
+      PRICE_FLOOR: '50'
+      # Kronos is OFF by default: it needs a ~1 GB PyTorch install and was gating every alert.
+      KRONOS_ENABLED: 'false'
       KRONOS_REQUIRED: 'false'
+      HF_HOME: ${{ github.workspace }}/.cache/huggingface
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v5
+      - uses: actions/checkout@v4
         with:
           ref: main
 
-      - name: Select task and check market hours
+      - name: Select task
         id: task
         shell: bash
         env:
@@ -63,100 +65,65 @@ jobs:
           SCHEDULE_CRON: ${{ github.event.schedule }}
           MANUAL_TASK: ${{ inputs.task }}
         run: |
-          if [[ "$EVENT_NAME" == "schedule" && "$SCHEDULE_CRON" == "0 3 * * 0" ]]; then
-            TASK="refresh-universe"
+          if [[ "$EVENT_NAME" == "schedule" && "$SCHEDULE_CRON" == "47 2 * * 0" ]]; then
+            echo "name=refresh-universe" >> "$GITHUB_OUTPUT"
           elif [[ "$EVENT_NAME" == "workflow_dispatch" ]]; then
-            TASK="${MANUAL_TASK:-scan}"
+            echo "name=${MANUAL_TASK:-scan}" >> "$GITHUB_OUTPUT"
           else
-            TASK="scan"
+            echo "name=scan" >> "$GITHUB_OUTPUT"
           fi
-          echo "name=$TASK" >> "$GITHUB_OUTPUT"
+          echo "Selected: $(tail -n 1 "$GITHUB_OUTPUT")  (event=$EVENT_NAME cron=$SCHEDULE_CRON)"
 
-          # Fast-exit guard if GitHub Actions delays a scheduled cron past 15:35 IST
-          IST_HM=$(TZ="Asia/Kolkata" date +%H%M)
-          IST_DOW=$(TZ="Asia/Kolkata" date +%u)
-          if [[ "$EVENT_NAME" == "schedule" && "$TASK" == "scan" ]]; then
-            if (( IST_DOW > 5 || 10#$IST_HM < 915 || 10#$IST_HM > 1535 )); then
-              echo "skip_outside_hours=true" >> "$GITHUB_OUTPUT"
-              echo "Scheduled run triggered at IST $IST_HM (outside 09:15-15:35 IST); skipping heavy setup cleanly."
-              exit 0
-            fi
-          fi
-          echo "skip_outside_hours=false" >> "$GITHUB_OUTPUT"
-          echo "Selected task: $TASK (IST $IST_HM)"
-
-      - name: Set up Python 3.11
-        if: steps.task.outputs.skip_outside_hours != 'true'
-        id: setup-python
-        uses: actions/setup-python@v6
+      - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
+          cache: 'pip'
+          cache-dependency-path: requirements.txt
 
-      - name: Restore Python environment cache
-        if: steps.task.outputs.skip_outside_hours != 'true'
-        id: python-cache
-        uses: actions/cache@v5
-        with:
-          path: .venv
-          # Include exact patch version (e.g. 3.11.17 vs 3.11.18) so runner image differences never break .venv symlinks
-          key: bis20-venv-ubuntu-${{ steps.setup-python.outputs.python-version }}-v3-${{ hashFiles('requirements.txt') }}
+      - name: Install lightweight requirements
+        run: python -m pip install -r requirements.txt
 
-      - name: Ensure healthy Python virtual environment
-        if: steps.task.outputs.skip_outside_hours != 'true'
-        shell: bash
+      - name: Kronos (only when enabled)
+        if: env.KRONOS_ENABLED == 'true' && (steps.task.outputs.name == 'scan' || steps.task.outputs.name == 'test-kronos')
         run: |
-          if [ ! -x .venv/bin/python ] || ! .venv/bin/python -c "import numpy, pandas, yfinance, requests, torch" >/dev/null 2>&1; then
-            echo "Building fresh .venv for Python ${{ steps.setup-python.outputs.python-version }}..."
-            rm -rf .venv
-            python -m venv .venv
-            .venv/bin/python -m pip install --upgrade pip
-            .venv/bin/python -m pip install --index-url https://download.pytorch.org/whl/cpu 'torch==2.7.1+cpu'
-            .venv/bin/python -m pip install -r requirements.txt
-          else
-            echo "Cached .venv verified healthy for Python ${{ steps.setup-python.outputs.python-version }}."
-          fi
+          python -m pip install --index-url https://download.pytorch.org/whl/cpu 'torch==2.7.1+cpu'
+          python -m pip install -r requirements-kronos.txt
+          git clone --depth 1 https://github.com/shiyu-coder/Kronos.git vendor/Kronos
 
-      - name: Restore Kronos model cache
-        if: steps.task.outputs.skip_outside_hours != 'true' && (steps.task.outputs.name == 'scan' || steps.task.outputs.name == 'test-kronos' || steps.task.outputs.name == 'dry-run-v2')
-        id: hf-cache
-        uses: actions/cache@v5
-        with:
-          path: .cache/huggingface
-          key: bis20-hf-kronos-mini-tokenizer2k-v1
-
-      - name: Clone official Kronos source
-        if: steps.task.outputs.skip_outside_hours != 'true' && (steps.task.outputs.name == 'scan' || steps.task.outputs.name == 'test-kronos' || steps.task.outputs.name == 'dry-run-v2')
-        run: |
-          rm -rf vendor/Kronos
-          git clone --depth 1 https://github.com/shiyu-coder/Kronos.git vendor/Kronos || echo "Warning: Kronos clone failed; running technical strategy."
-
-      - name: Run Bharat Intraday Scout
-        if: steps.task.outputs.skip_outside_hours != 'true'
+      - name: Run scanner
         env:
           TASK_NAME: ${{ steps.task.outputs.name }}
-        run: .venv/bin/python scanner.py --task "$TASK_NAME"
+        run: python scanner.py --task "$TASK_NAME"
 
-      - name: Upload dry-run V2 diagnostic report
+      - name: Upload dry-run report
         if: always() && steps.task.outputs.name == 'dry-run-v2'
         uses: actions/upload-artifact@v4
         with:
-          name: bis20-dry-run-v2-report
+          name: bis20-dry-run-report
           path: dry_run_v2_report.json
           if-no-files-found: warn
           retention-days: 7
 
-      - name: Commit scanner state and universe cache
-        if: success() && steps.task.outputs.skip_outside_hours != 'true' && steps.task.outputs.name != 'dry-run-v2'
+      - name: Commit scanner state
+        if: success() && steps.task.outputs.name != 'dry-run-v2'
         shell: bash
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add runtime/bis20.sqlite3 data/liquid_universe.json 2>/dev/null || true
           if ! git diff --cached --quiet; then
-            git commit -m "BIS 2.0: persist scanner state [skip ci]"
-            git pull --rebase --autostash origin main || true
-            git push origin HEAD:main
+            git commit -m "BIS: persist scanner state"
+            git push origin HEAD:main || { git pull --rebase -X theirs origin main && git push origin HEAD:main; }
           else
-            echo "No state/cache changes to commit."
+            echo "No state changes."
           fi
 
+      # If anything above breaks, you get a Telegram message instead of silence.
+      - name: Telegram failure alert
+        if: failure() && github.event_name != 'workflow_dispatch'
+        shell: bash
+        run: |
+          curl -s -m 15 "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+            --data-urlencode "chat_id=${TELEGRAM_CHAT_ID}" \
+            --data-urlencode "text=⚠️ Bharat Scout run FAILED (${{ steps.task.outputs.name }}). Logs: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
+            > /dev/null || true

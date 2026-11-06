@@ -4,11 +4,10 @@ on:
   schedule:
     # Weekly NSE equity universe/liquidity refresh: Sunday 08:30 IST = 03:00 UTC.
     - cron: '0 3 * * 0'
-    # Staggered weekday session launchers (08:45, 09:05, 09:20 IST and every 30m from 09:30 to 14:30 IST).
-    # Each run stays alive for 50 minutes scanning every 5 minutes in a loop and self-chains the next run!
-    - cron: '15,35,50 3 * * 1-5'
-    - cron: '0,30 4-8 * * 1-5'
-    - cron: '0 9 * * 1-5'
+    # Weekday market scans: 09:20-09:25 IST (03:50-03:55 UTC), 09:30-15:25 IST (04:00-09:55 UTC), and 15:30 IST (10:00 UTC).
+    - cron: '50,55 3 * * 1-5'
+    - cron: '*/5 4-9 * * 1-5'
+    - cron: '0 10 * * 1-5'
   workflow_dispatch:
     inputs:
       task:
@@ -23,20 +22,20 @@ on:
           - test-telegram
           - test-kronos
 
-# Prevent two runs from mutating SQLite state or running duplicate loops simultaneously.
+# Prevent two runs from mutating SQLite state simultaneously.
 concurrency:
   group: bis20-main-runner
   cancel-in-progress: false
 
 permissions:
   contents: write
-  actions: write
 
 jobs:
   run-scanner:
+    # Enabled by default! Set repository variable BIS_SCANNER_ENABLED='false' only if you want to pause scheduled runs.
     if: github.event_name != 'schedule' || vars.BIS_SCANNER_ENABLED != 'false'
     runs-on: ubuntu-latest
-    timeout-minutes: 65
+    timeout-minutes: 8
     env:
       PYTHONUNBUFFERED: '1'
       HF_HOME: ${{ github.workspace }}/.cache/huggingface
@@ -47,8 +46,7 @@ jobs:
       MIN_AVG_TURNOVER_INR: '50000000'
       INTRADAY_UNIVERSE_SIZE: '200'
       MAX_SIGNALS_PER_DAY: '2'
-      MAX_SIGNALS_PER_CYCLE: '1'
-      CONTINUOUS_LOOP_MINUTES: '50'
+      MAX_SIGNALS_PER_CYCLE: '2'
       KRONOS_ENABLED: 'true'
       KRONOS_REQUIRED: 'false'
     steps:
@@ -74,12 +72,13 @@ jobs:
           fi
           echo "name=$TASK" >> "$GITHUB_OUTPUT"
 
+          # Fast-exit guard if GitHub Actions delays a scheduled cron past 15:35 IST
           IST_HM=$(TZ="Asia/Kolkata" date +%H%M)
           IST_DOW=$(TZ="Asia/Kolkata" date +%u)
           if [[ "$EVENT_NAME" == "schedule" && "$TASK" == "scan" ]]; then
-            if (( IST_DOW > 5 || 10#$IST_HM < 830 || 10#$IST_HM > 1445 )); then
+            if (( IST_DOW > 5 || 10#$IST_HM < 915 || 10#$IST_HM > 1535 )); then
               echo "skip_outside_hours=true" >> "$GITHUB_OUTPUT"
-              echo "Scheduled run triggered at IST $IST_HM (outside 08:30-14:45 IST); skipping cleanly."
+              echo "Scheduled run triggered at IST $IST_HM (outside 09:15-15:35 IST); skipping heavy setup cleanly."
               exit 0
             fi
           fi
@@ -99,6 +98,7 @@ jobs:
         uses: actions/cache@v5
         with:
           path: .venv
+          # Include exact patch version (e.g. 3.11.17 vs 3.11.18) so runner image differences never break .venv symlinks
           key: bis20-venv-ubuntu-${{ steps.setup-python.outputs.python-version }}-v3-${{ hashFiles('requirements.txt') }}
 
       - name: Ensure healthy Python virtual environment
@@ -130,7 +130,7 @@ jobs:
           rm -rf vendor/Kronos
           git clone --depth 1 https://github.com/shiyu-coder/Kronos.git vendor/Kronos || echo "Warning: Kronos clone failed; running technical strategy."
 
-      - name: Run Bharat Intraday Scout (Auto-Looping Session)
+      - name: Run Bharat Intraday Scout
         if: steps.task.outputs.skip_outside_hours != 'true'
         env:
           TASK_NAME: ${{ steps.task.outputs.name }}
@@ -146,7 +146,7 @@ jobs:
           retention-days: 7
 
       - name: Commit scanner state and universe cache
-        if: always() && steps.task.outputs.skip_outside_hours != 'true' && steps.task.outputs.name != 'dry-run-v2'
+        if: success() && steps.task.outputs.skip_outside_hours != 'true' && steps.task.outputs.name != 'dry-run-v2'
         shell: bash
         run: |
           git config user.name "github-actions[bot]"
@@ -158,22 +158,5 @@ jobs:
             git push origin HEAD:main
           else
             echo "No state/cache changes to commit."
-          fi
-
-      - name: Auto-chain next 50-minute scan session if market still open and <2 trades today
-        if: success() && steps.task.outputs.skip_outside_hours != 'true' && steps.task.outputs.name == 'scan'
-        shell: bash
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          IST_HM=$(TZ="Asia/Kolkata" date +%H%M)
-          IST_DOW=$(TZ="Asia/Kolkata" date +%u)
-          TODAY_SIGNALS=$(.venv/bin/python -c "import scanner; print(scanner.get_today_signal_count())" 2>/dev/null || echo "0")
-          echo "Current IST: $IST_HM | Signals today: $TODAY_SIGNALS"
-          if (( IST_DOW <= 5 && 10#$IST_HM >= 915 && 10#$IST_HM < 1425 && TODAY_SIGNALS < 2 )); then
-            echo "Market still open and <2 signals delivered ($TODAY_SIGNALS/2). Auto-dispatching next 50-minute scan session..."
-            gh workflow run bis20.yml --ref main -f task=scan || true
-          else
-            echo "No further auto-chain needed (either market past 14:25 IST or 2 daily signals already delivered)."
           fi
 

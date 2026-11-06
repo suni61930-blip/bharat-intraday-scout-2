@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import sqlite3
+import subprocess
 import sys
 import time
 from datetime import datetime, timedelta, time as dtime
@@ -35,9 +36,8 @@ NSE_EQUITY_CSV = os.getenv(
     "https://nsearchives.nseindia.com/content/equities/EQUITY_L.csv",
 )
 
-# Calibrated from dry-run-v2 telemetry on the 200-stock NSE universe:
-# Targets 1-2 elite intraday momentum trades daily from the top movers (3.2% to 9.5% move)
-# with strong RVOL and ADX trend confirmation, while avoiding early-morning noise.
+# Calibrated for automatic continuous 5-minute scanning and reliable 1-2 daily trades
+# from NSE's Top Intraday Movers.
 CFG: Dict[str, Any] = {
     "PRICE_FLOOR": float(os.getenv("PRICE_FLOOR", "50")),
     "MIN_AVG_TURNOVER_INR": float(os.getenv("MIN_AVG_TURNOVER_INR", "50000000")),  # ₹5 Cr floor
@@ -50,37 +50,38 @@ CFG: Dict[str, Any] = {
     "BAR_INTERVAL": "5m",
     "MIN_HISTORY_BARS": 45,
     "MIN_TIME_SLOT_SESSIONS": 3,
-    "MIN_RELATIVE_VOLUME": 1.75,        # Require genuine 1.75x+ 5m volume surge for Tier-1
-    "MIN_CUMULATIVE_RVOL": 1.50,        # Require 1.50x+ cumulative session volume for Tier-1
-    "BREAKOUT_LOOKBACK": 12,            # 12-bar (1-hour) consolidation high/low breakout
-    "MAX_EXTENSION_ATR": 1.8,           # Prevent chasing over-extended vertical candles
-    "MIN_DAY_MOVE_PCT": float(os.getenv("MIN_DAY_MOVE_PCT", "3.2")),   # Focus strictly on stocks moving 3.2%+ toward 10%+
-    "MAX_DAY_MOVE_PCT": float(os.getenv("MAX_DAY_MOVE_PCT", "9.5")),   # Leave headroom before 10-20% circuit limits
-    "MAX_BAR_AGE_MIN": 12,
-    "MIN_RSI_BUY": 58.0,
-    "MAX_RSI_BUY": 90.0,
-    "MIN_RSI_SELL": 10.0,
-    "MAX_RSI_SELL": 42.0,
-    "MIN_ADX_TREND": 28.0,              # Strong directional trend (GROWW=62.1, SHRINGARMS=60.7 in dry-run)
-    "MIN_BODY_RATIO": 0.45,             # Solid breakout candle body (filters out doji/wick noise)
-    "MIN_CLOSE_LOCATION_BUY": 0.70,     # Close in top 30% of candle range
-    "MAX_CLOSE_LOCATION_SELL": 0.30,    # Close in bottom 30% of candle range
+    "MIN_RELATIVE_VOLUME": 1.30,        # Same-slot 5m RVOL floor when paired with cumulative volume
+    "MIN_CUMULATIVE_RVOL": 1.35,        # Cumulative session RVOL floor
+    "BREAKOUT_LOOKBACK": 10,            # 10-bar (50-min) consolidation lookback
+    "MAX_EXTENSION_ATR": 2.4,           # Allow strong momentum candles without chasing extreme spikes
+    "MIN_DAY_MOVE_PCT": float(os.getenv("MIN_DAY_MOVE_PCT", "2.8")),   # Focus on stocks moving 2.8% to 9.8%
+    "MAX_DAY_MOVE_PCT": float(os.getenv("MAX_DAY_MOVE_PCT", "9.8")),   # Before 10% circuit cap
+    "MAX_BAR_AGE_MIN": 14,
+    "MIN_RSI_BUY": 55.0,
+    "MAX_RSI_BUY": 92.0,
+    "MIN_RSI_SELL": 8.0,
+    "MAX_RSI_SELL": 45.0,
+    "MIN_ADX_TREND": 22.0,              # Directional trend strength
+    "MIN_BODY_RATIO": 0.30,             # Clean candle body (was 0.45, which rejected valid continuation bars)
+    "MIN_CLOSE_LOCATION_BUY": 0.60,     # Close in top 40% of 5m candle range
+    "MAX_CLOSE_LOCATION_SELL": 0.40,    # Close in bottom 40% of 5m candle range
     "STOP_ATR_MULTIPLE": 1.50,
     "MIN_STOP_PCT": 0.0075,             # Minimum 0.75% stop distance
     "MAX_STOP_PCT": 0.0250,             # Maximum 2.50% stop distance
     "TARGET_R_MULTIPLE": 2.2,           # Primary target = 2.2R
     "RUNNER_R_MULTIPLE": 3.5,           # Runner target = 3.5R for 10%+ intraday movers
-    "MIN_SCORE_TIER1": int(os.getenv("MIN_SCORE_TIER1", "85")),
-    "MIN_SCORE_TIER2": int(os.getenv("MIN_SCORE_TIER2", "75")),
-    "TOP_MOVERS_POOL_SIZE": int(os.getenv("TOP_MOVERS_POOL_SIZE", "8")),
-    "MORNING_GUARD_HOUR": 10,           # Before 10:15 IST, allow at most 1 trade and require Score >= 92
-    "MORNING_GUARD_MINUTE": 15,
-    "TIER2_START_HOUR": 11,             # Activate Tier-2 Top-Mover Continuation from 11:30 IST if 0 trades found
-    "TIER2_START_MINUTE": 30,
+    "MIN_SCORE_TIER1": int(os.getenv("MIN_SCORE_TIER1", "76")),
+    "MIN_SCORE_TIER2": int(os.getenv("MIN_SCORE_TIER2", "68")),
+    "TOP_MOVERS_POOL_SIZE": int(os.getenv("TOP_MOVERS_POOL_SIZE", "10")),
+    "MORNING_GUARD_HOUR": 9,            # Before 09:45 IST, allow at most 1 trade so slot #2 stays open for 09:45+
+    "MORNING_GUARD_MINUTE": 45,
+    "TIER2_START_HOUR": 10,             # Activate Tier-2 Top-Mover Continuation from 10:00 IST if <2 trades found
+    "TIER2_START_MINUTE": 0,
     "LAST_ENTRY_HOUR": 14,              # No new intraday entries after 14:30 IST
     "LAST_ENTRY_MINUTE": 30,
     "MAX_SIGNALS_PER_CYCLE": int(os.getenv("MAX_SIGNALS_PER_CYCLE", "1")),
     "MAX_SIGNALS_PER_DAY": int(os.getenv("MAX_SIGNALS_PER_DAY", "2")),
+    "CONTINUOUS_LOOP_MINUTES": int(os.getenv("CONTINUOUS_LOOP_MINUTES", "50")),  # Auto-loop every 5m for 50 mins per run
     "KRONOS_ENABLED": os.getenv("KRONOS_ENABLED", "true").lower() == "true",
     "KRONOS_REQUIRED": os.getenv("KRONOS_REQUIRED", "false").lower() == "true",
     "KRONOS_MODEL": os.getenv("KRONOS_MODEL", "NeoQuasar/Kronos-mini"),
@@ -120,6 +121,22 @@ def init_db() -> None:
         conn.commit()
 
 
+def persist_state_to_git() -> None:
+    """Commit and push SQLite state immediately after delivering an alert inside a continuous loop."""
+    try:
+        subprocess.run(["git", "config", "user.name", "github-actions[bot]"], check=False)
+        subprocess.run(["git", "config", "user.email", "41898282+github-actions[bot]@users.noreply.github.com"], check=False)
+        subprocess.run(["git", "add", "runtime/bis20.sqlite3", "data/liquid_universe.json"], check=False)
+        diff = subprocess.run(["git", "diff", "--cached", "--quiet"])
+        if diff.returncode != 0:
+            subprocess.run(["git", "commit", "-m", "BIS 2.0: persist scanner state [skip ci]"], check=False)
+            subprocess.run(["git", "pull", "--rebase", "--autostash", "origin", "main"], check=False)
+            subprocess.run(["git", "push", "origin", "HEAD:main"], check=False)
+            LOG.info("Persisted updated SQLite state to GitHub main branch.")
+    except Exception as exc:
+        LOG.warning("Git state persistence warning: %s", exc)
+
+
 def get_today_signal_count(day_str: Optional[str] = None) -> int:
     day = day_str or datetime.now(TZ).strftime("%Y-%m-%d")
     with db_connect() as conn:
@@ -137,6 +154,8 @@ def get_today_alerted_symbols(day_str: Optional[str] = None) -> set:
 def load_kronos() -> None:
     """Load Kronos-mini model on CPU if available; degrade gracefully if KRONOS_REQUIRED=false."""
     global kronos_predictor, kronos_status
+    if kronos_predictor is not None:
+        return
     if not CFG["KRONOS_ENABLED"]:
         kronos_status = "disabled"
         if CFG["KRONOS_REQUIRED"]:
@@ -172,6 +191,14 @@ def is_market_session(now: Optional[datetime] = None) -> bool:
         return False
     t = now.time()
     return dtime(9, 20) <= t <= dtime(15, 30)
+
+
+def is_pre_market_wait_window(now: Optional[datetime] = None) -> bool:
+    now = now or datetime.now(TZ)
+    if now.weekday() >= 5:
+        return False
+    t = now.time()
+    return dtime(8, 30) <= t < dtime(9, 20)
 
 
 def is_entry_window(now: Optional[datetime] = None) -> bool:
@@ -595,9 +622,8 @@ def evaluate_symbol(
             diagnostic["rejected"] = "price_floor"
         return None
 
-    # Check intraday % move early (fast filter: focuses strictly on 3.2% to 9.5% top movers)
     day_move, open_move, session_high, session_low = compute_effective_day_move(df, last_idx, daily, price)
-    min_move_req = 2.8 if allow_tier2 else CFG["MIN_DAY_MOVE_PCT"]
+    min_move_req = 2.5 if allow_tier2 else CFG["MIN_DAY_MOVE_PCT"]
     if abs(day_move) < min_move_req or abs(day_move) > CFG["MAX_DAY_MOVE_PCT"]:
         if diagnostic is not None:
             diagnostic["rejected"] = "day_move"
@@ -613,13 +639,12 @@ def evaluate_symbol(
             "sessions": sessions_compared,
         }
 
-    # Strict RVOL confirmation for Tier-1; slightly relaxed for Tier-2 Top-Mover continuation
-    if allow_tier2:
-        vol_pass = (relvol >= 1.35 and cumulative_relvol >= 1.25) or (cumulative_relvol >= 1.60)
-    else:
-        vol_pass = (relvol >= CFG["MIN_RELATIVE_VOLUME"] and cumulative_relvol >= CFG["MIN_CUMULATIVE_RVOL"]) or (
-            relvol >= 2.50 and cumulative_relvol >= 1.25
-        )
+    # Volume confirmation: pass if both same-slot and cumulative RVOL are strong, OR cumulative RVOL >= 1.75x
+    vol_pass = (
+        (relvol >= CFG["MIN_RELATIVE_VOLUME"] and cumulative_relvol >= CFG["MIN_CUMULATIVE_RVOL"])
+        or (cumulative_relvol >= 1.75 and relvol >= 0.85)
+        or (relvol >= 2.20 and cumulative_relvol >= 1.15)
+    )
     if not vol_pass:
         if diagnostic is not None:
             diagnostic["rejected"] = "relative_volume"
@@ -660,19 +685,23 @@ def evaluate_symbol(
         and close_location <= CFG["MAX_CLOSE_LOCATION_SELL"]
     )
 
-    # Tier-1 requires a genuine fresh breakout above 12-bar high (or session high breakout)
-    breakout_buy = price > prior_high and price >= session_high * 0.996
-    breakdown_sell = price < prior_low and price <= session_low * 1.004
+    # Tier-1 Breakout OR High-Tight Flag Continuation (within 0.65% of session high with strong RVOL & ADX)
+    breakout_buy = (price >= prior_high * 0.999) or (
+        price >= session_high * 0.9935 and cumulative_relvol >= 1.60 and adx_val >= 25.0
+    )
+    breakdown_sell = (price <= prior_low * 1.001) or (
+        price <= session_low * 1.0065 and cumulative_relvol >= 1.60 and adx_val >= 25.0
+    )
 
     daily_ema20 = float(daily.get("daily_ema20", price))
     daily_ema50 = float(daily.get("daily_ema50", price))
-    daily_up = (price > daily_ema20) or (day_move >= 4.0 and cumulative_relvol >= 1.80)
-    daily_down = (price < daily_ema20) or (day_move <= -4.0 and cumulative_relvol >= 1.80)
+    daily_up = (price > daily_ema20) or (day_move >= 3.5 and cumulative_relvol >= 1.60)
+    daily_down = (price < daily_ema20) or (day_move <= -3.5 and cumulative_relvol >= 1.60)
 
     above_vwap = price > vwap_value
     below_vwap = price < vwap_value
-    adx_buy = adx_val >= CFG["MIN_ADX_TREND"] and plus_di > minus_di
-    adx_sell = adx_val >= CFG["MIN_ADX_TREND"] and minus_di > plus_di
+    adx_buy = adx_val >= CFG["MIN_ADX_TREND"] and plus_di >= minus_di * 0.95
+    adx_sell = adx_val >= CFG["MIN_ADX_TREND"] and minus_di >= plus_di * 0.95
 
     side = None
     breakout_level = None
@@ -688,11 +717,11 @@ def evaluate_symbol(
         and adx_buy
         and CFG["MIN_RSI_BUY"] <= rsi_value <= CFG["MAX_RSI_BUY"]
         and day_move >= CFG["MIN_DAY_MOVE_PCT"]
-        and open_move >= 1.0
+        and open_move >= 0.5
     ):
         extension = max(0.0, (price - prior_high) / atr_value)
         if extension <= CFG["MAX_EXTENSION_ATR"]:
-            side, breakout_level = "BUY", prior_high
+            side, breakout_level = "BUY", min(prior_high, session_high)
     elif (
         daily_down
         and fast < slow
@@ -702,42 +731,42 @@ def evaluate_symbol(
         and adx_sell
         and CFG["MIN_RSI_SELL"] <= rsi_value <= CFG["MAX_RSI_SELL"]
         and day_move <= -CFG["MIN_DAY_MOVE_PCT"]
-        and open_move <= -1.0
+        and open_move <= -0.5
     ):
         extension = max(0.0, (prior_low - price) / atr_value)
         if extension <= CFG["MAX_EXTENSION_ATR"]:
-            side, breakout_level = "SELL", prior_low
+            side, breakout_level = "SELL", max(prior_low, session_low)
 
-    # Tier-2 Top-Mover Continuation fallback (only after 11:30 IST if 0 trades have fired today)
+    # Tier-2 Top-Mover Continuation fallback (from 10:00 IST onward if <2 trades have fired today)
     if not side and allow_tier2:
-        near_day_high = price >= session_high * 0.992
-        near_day_low = price <= session_low * 1.008
+        near_day_high = price >= session_high * 0.988
+        near_day_low = price <= session_low * 1.012
         if (
-            day_move >= 3.5
-            and open_move >= 1.2
+            day_move >= 3.0
+            and open_move >= 0.5
             and above_vwap
-            and fast > slow
+            and price > slow
+            and fast >= slow * 0.998
             and near_day_high
             and float(last["close"]) > float(last["open"])
-            and body_ratio >= 0.35
-            and close_location >= 0.65
-            and adx_val >= 24.0
-            and 58.0 <= rsi_value <= 90.0
+            and body_ratio >= 0.25
+            and close_location >= 0.55
+            and 54.0 <= rsi_value <= 92.0
         ):
             side, breakout_level = "BUY", session_high
             tier = "TIER-2"
             setup_label = "Tier-2: Top-5 Mover Intraday Trend Continuation"
         elif (
-            day_move <= -3.5
-            and open_move <= -1.2
+            day_move <= -3.0
+            and open_move <= -0.5
             and below_vwap
-            and fast < slow
+            and price < slow
+            and fast <= slow * 1.002
             and near_day_low
             and float(last["close"]) < float(last["open"])
-            and body_ratio >= 0.35
-            and close_location <= 0.35
-            and adx_val >= 24.0
-            and 10.0 <= rsi_value <= 42.0
+            and body_ratio >= 0.25
+            and close_location <= 0.45
+            and 8.0 <= rsi_value <= 46.0
         ):
             side, breakout_level = "SELL", session_low
             tier = "TIER-2"
@@ -753,29 +782,26 @@ def evaluate_symbol(
             "adx_buy": bool(adx_buy), "adx_sell": bool(adx_sell),
             "rsi_buy": bool(CFG["MIN_RSI_BUY"] <= rsi_value <= CFG["MAX_RSI_BUY"]),
             "rsi_sell": bool(CFG["MIN_RSI_SELL"] <= rsi_value <= CFG["MAX_RSI_SELL"]),
+            "open_move_ok": bool(abs(open_move) >= 0.5),
         }
         diagnostic["day_move_pct"] = round(day_move, 2)
+        diagnostic["open_move_pct"] = round(open_move, 2)
 
     if not side:
         if diagnostic is not None:
             diagnostic["rejected"] = "technical_alignment"
         return None
 
-    # Composite conviction score (0-100)
     score = 0
-    score += 22 if relvol >= 2.4 else (16 if relvol >= 1.8 else 10)
-    score += 18 if cumulative_relvol >= 2.0 else (14 if cumulative_relvol >= 1.5 else 8)
-    score += 18 if 4.0 <= abs(day_move) <= 8.5 else (14 if abs(day_move) >= 3.2 else 8)
+    score += 22 if relvol >= 2.2 else (16 if relvol >= 1.4 else 10)
+    score += 18 if cumulative_relvol >= 2.0 else (14 if cumulative_relvol >= 1.4 else 8)
+    score += 18 if 3.8 <= abs(day_move) <= 8.8 else (14 if abs(day_move) >= 2.8 else 8)
     score += 10 if (daily_ema20 > daily_ema50 if side == "BUY" else daily_ema20 < daily_ema50) else 5
-    score += 15 if adx_val >= 35.0 else (12 if adx_val >= 28.0 else 6)
-    score += 10 if body_ratio >= 0.60 else (7 if body_ratio >= 0.45 else 4)
+    score += 15 if adx_val >= 32.0 else (12 if adx_val >= 22.0 else 6)
+    score += 10 if body_ratio >= 0.55 else (7 if body_ratio >= 0.30 else 4)
     score += 7 if tier == "TIER-1" else 2
 
     min_req_score = CFG["MIN_SCORE_TIER1"] if tier == "TIER-1" else CFG["MIN_SCORE_TIER2"]
-    # Before 10:15 IST, require elite conviction (Score >= 92) so early volatility doesn't waste slots
-    if now.time() < dtime(CFG["MORNING_GUARD_HOUR"], CFG["MORNING_GUARD_MINUTE"]):
-        min_req_score = max(min_req_score, 92)
-
     if score < min_req_score:
         if diagnostic is not None:
             diagnostic["rejected"] = "low_score"
@@ -940,7 +966,7 @@ def rank_top_intraday_movers(
     daily_map: Dict[str, Dict[str, Any]],
     now: datetime,
 ) -> List[Tuple[float, str]]:
-    """Rank stocks by absolute intraday move % among liquid stocks moving between 2.8% and 9.5%."""
+    """Rank stocks by absolute intraday move % among liquid stocks moving between 2.5% and 9.8%."""
     movers: List[Tuple[float, str]] = []
     for symbol, raw_df in intraday_map.items():
         if raw_df is None or raw_df.empty:
@@ -951,7 +977,7 @@ def rank_top_intraday_movers(
         last_idx = df.index[-1]
         price = float(df.iloc[-1]["close"])
         day_move, _, _, _ = compute_effective_day_move(df, last_idx, daily_map.get(symbol, {}), price)
-        if 2.8 <= abs(day_move) <= CFG["MAX_DAY_MOVE_PCT"]:
+        if 2.5 <= abs(day_move) <= CFG["MAX_DAY_MOVE_PCT"]:
             movers.append((abs(day_move), symbol))
     movers.sort(key=lambda x: x[0], reverse=True)
     return movers
@@ -973,10 +999,10 @@ def run_scan_cycle() -> Dict[str, Any]:
             "telegram_delivered": delivered_prior,
         }
 
-    # Morning slot pacing: allow at most 1 trade before 10:15 IST so we always reserve a slot for prime mid-morning breakouts
+    # Morning slot pacing: allow at most 1 trade before 09:45 IST so slot #2 stays open for 09:45+
     if now.time() < dtime(CFG["MORNING_GUARD_HOUR"], CFG["MORNING_GUARD_MINUTE"]) and existing_today >= 1:
         return {
-            "status": "morning_slot_used_waiting_for_midday",
+            "status": "morning_slot_used_waiting_for_0945",
             "at": now.isoformat(),
             "signals_today": existing_today,
             "telegram_delivered": delivered_prior,
@@ -1013,26 +1039,33 @@ def run_scan_cycle() -> Dict[str, Any]:
     top_mover_pool = {sym for _, sym in top_movers[:CFG["TOP_MOVERS_POOL_SIZE"] * 2]}
 
     candidates: List[Tuple[int, float, Dict[str, Any], pd.DataFrame]] = []
+    top5_diagnostics: Dict[str, Any] = {}
 
-    # Pass 1: Tier-1 Strict Multi-Factor Breakout Scan focused on today's Top Movers
+    # Pass 1: Tier-1 Multi-Factor Breakout Scan focused on today's Top Movers
     for symbol in symbols:
         if symbol in alerted_today or (top_mover_pool and symbol not in top_mover_pool):
             continue
         frame = intraday_all.get(symbol, pd.DataFrame())
-        signal = evaluate_symbol(symbol, frame, daily_map[symbol], now, allow_tier2=False)
+        diag: Dict[str, Any] = {}
+        signal = evaluate_symbol(symbol, frame, daily_map[symbol], now, diagnostic=diag, allow_tier2=False)
+        if symbol in {s for _, s in top_movers[:5]}:
+            top5_diagnostics[symbol] = "PASS_TIER1" if signal else diag
         if signal:
             candidates.append((signal["score"], abs(signal["day_move_pct"]), signal, frame))
 
-    # Pass 2: Tier-2 Top-Mover Continuation fallback after 11:30 IST if 0 signals have fired today
+    # Pass 2: Tier-2 Top-Mover Continuation fallback after 10:00 IST if <2 signals have fired today
     tier2_triggered = False
-    if not candidates and is_tier2_window(now) and existing_today == 0:
+    if not candidates and is_tier2_window(now) and existing_today < CFG["MAX_SIGNALS_PER_DAY"]:
         tier2_triggered = True
         top_mover_symbols = [sym for _, sym in top_movers[:CFG["TOP_MOVERS_POOL_SIZE"]]]
         for symbol in top_mover_symbols:
             if symbol in alerted_today:
                 continue
             frame = intraday_all.get(symbol, pd.DataFrame())
-            signal = evaluate_symbol(symbol, frame, daily_map[symbol], now, allow_tier2=True)
+            diag_t2: Dict[str, Any] = {}
+            signal = evaluate_symbol(symbol, frame, daily_map[symbol], now, diagnostic=diag_t2, allow_tier2=True)
+            if symbol in {s for _, s in top_movers[:5]} and signal:
+                top5_diagnostics[symbol] = "PASS_TIER2"
             if signal:
                 candidates.append((signal["score"], abs(signal["day_move_pct"]), signal, frame))
 
@@ -1068,11 +1101,15 @@ def run_scan_cycle() -> Dict[str, Any]:
             inserted += 1
 
     delivered = delivered_prior + deliver_pending_signals(limit=5)
+    if inserted > 0 or delivered > 0:
+        persist_state_to_git()
+
     summary = {
         "status": "complete",
         "at": now.isoformat(),
         "symbols_considered": len(symbols),
         "top_5_intraday_movers": [{"symbol": s, "abs_move_pct": round(m, 2)} for m, s in top_movers[:5]],
+        "top_5_diagnostics": top5_diagnostics,
         "technical_candidates": technical_candidates,
         "tier2_fallback_evaluated": tier2_triggered,
         "kronos_rejected_or_unavailable": kronos_rejected,
@@ -1085,6 +1122,70 @@ def run_scan_cycle() -> Dict[str, Any]:
     }
     LOG.info("SCAN SUMMARY %s", json.dumps(summary))
     return summary
+
+
+def seconds_until_next_5m_slot(now: Optional[datetime] = None) -> float:
+    """Calculate sleep seconds until 12 seconds after the next 5-minute boundary (e.g. 09:25:12)."""
+    now = now or datetime.now(TZ)
+    minute_mod = now.minute % 5
+    mins_to_add = 5 - minute_mod
+    next_slot = (now + timedelta(minutes=mins_to_add)).replace(second=12, microsecond=0)
+    wait_sec = (next_slot - now).total_seconds()
+    if wait_sec < 15:
+        wait_sec += 300.0
+    return wait_sec
+
+
+def run_continuous_market_session() -> Dict[str, Any]:
+    """Run 5-minute scan cycles automatically in a loop so the user never has to trigger runs manually."""
+    session_start = time.monotonic()
+    max_seconds = CFG["CONTINUOUS_LOOP_MINUTES"] * 60.0
+    now = datetime.now(TZ)
+
+    # If triggered between 08:30 and 09:20 IST, wait until 09:20:10 IST automatically
+    if is_pre_market_wait_window(now):
+        target_open = now.replace(hour=9, minute=20, second=10, microsecond=0)
+        wait_open = max(0.0, (target_open - now).total_seconds())
+        LOG.info("Pre-market start detected at %s; waiting %.0fs until 09:20:10 IST market scan...", now.strftime("%H:%M:%S"), wait_open)
+        time.sleep(wait_open)
+        now = datetime.now(TZ)
+
+    if not is_market_session(now):
+        LOG.info("Outside NSE market session (%s); scan skipped cleanly", now.strftime("%H:%M:%S"))
+        return {"status": "outside_market_hours", "at": now.isoformat()}
+
+    load_kronos()
+    if CFG["KRONOS_REQUIRED"] and kronos_predictor is None:
+        raise RuntimeError("Kronos is required but not ready: " + kronos_status)
+
+    cycles_run = 0
+    last_result: Dict[str, Any] = {"status": "idle"}
+
+    while True:
+        now = datetime.now(TZ)
+        if not is_entry_window(now):
+            LOG.info("Reached end of intraday entry window (%s); stopping session loop.", now.strftime("%H:%M:%S"))
+            break
+
+        cycles_run += 1
+        LOG.info("=== AUTO-SCAN CYCLE #%d at %s IST ===", cycles_run, now.strftime("%H:%M:%S"))
+        last_result = run_scan_cycle()
+
+        if last_result.get("status") == "daily_target_reached" or last_result.get("signals_today_total", 0) >= CFG["MAX_SIGNALS_PER_DAY"]:
+            LOG.info("Daily target of %d confirmed trades reached! Stopping session loop.", CFG["MAX_SIGNALS_PER_DAY"])
+            break
+
+        elapsed = time.monotonic() - session_start
+        wait_sec = seconds_until_next_5m_slot(datetime.now(TZ))
+        if elapsed + wait_sec >= max_seconds:
+            LOG.info("Session loop window (%.0fm) completed after %d cycles; handing off to next scheduled/chained job.", CFG["CONTINUOUS_LOOP_MINUTES"], cycles_run)
+            break
+
+        LOG.info("Sleeping %.0fs until next 5-minute candle close...", wait_sec)
+        time.sleep(wait_sec)
+
+    last_result["cycles_run"] = cycles_run
+    return last_result
 
 
 def run_dry_run_v2() -> Dict[str, Any]:
@@ -1164,7 +1265,6 @@ def run_dry_run_v2() -> Dict[str, Any]:
                     if not passed:
                         conditions_failed[key] += 1
 
-    # 1) Best 2 overall across the session (by score & move %)
     candidates_by_rank = sorted(candidates, key=lambda item: (-item[0], -item[1], item[2]["candle_time"], item[2]["symbol"]))
     seen_symbols = set()
     unique_daily_picks = []
@@ -1174,7 +1274,6 @@ def run_dry_run_v2() -> Dict[str, Any]:
             seen_symbols.add(sym)
             unique_daily_picks.append(item)
 
-    # 2) Simulated chronological live execution (with morning guard & 1 signal per 5m cycle)
     candidates_by_time = sorted(candidates, key=lambda item: (item[2]["candle_time"], -item[0], -item[1]))
     live_simulated_picks = []
     live_seen = set()
@@ -1187,8 +1286,6 @@ def run_dry_run_v2() -> Dict[str, Any]:
         if sig["symbol"] in live_seen or sig["candle_time"] in used_times:
             continue
         if anchor_dt.time() < dtime(CFG["MORNING_GUARD_HOUR"], CFG["MORNING_GUARD_MINUTE"]) and len(live_simulated_picks) >= 1:
-            continue
-        if sig["tier"] == "TIER-2" and len(live_simulated_picks) > 0:
             continue
         live_seen.add(sig["symbol"])
         used_times.add(sig["candle_time"])
@@ -1256,7 +1353,7 @@ def run_dry_run_v2() -> Dict[str, Any]:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Bharat Intraday Scout 2.0 one-shot runner")
+    parser = argparse.ArgumentParser(description="Bharat Intraday Scout 2.0 automatic session runner")
     parser.add_argument(
         "--task",
         choices=["scan", "refresh-universe", "test-telegram", "test-kronos", "dry-run-v2"],
@@ -1281,7 +1378,7 @@ def main() -> int:
         return 0
 
     if args.task == "test-telegram":
-        send_telegram_message("✅ Bharat Intraday Scout 2.0 Telegram test successful. Strategy & schedule upgraded.")
+        send_telegram_message("✅ Bharat Intraday Scout 2.0 Telegram test successful. Auto-session loop active.")
         LOG.info("Telegram test succeeded")
         return 0
 
@@ -1292,14 +1389,7 @@ def main() -> int:
         LOG.info("Kronos self-test succeeded: %s", kronos_status)
         return 0
 
-    if not is_market_session():
-        LOG.info("Outside NSE market session; scan skipped cleanly")
-        return 0
-
-    load_kronos()
-    if CFG["KRONOS_REQUIRED"] and kronos_predictor is None:
-        raise RuntimeError("Kronos is required but not ready: " + kronos_status)
-    result = run_scan_cycle()
+    result = run_continuous_market_session()
     LOG.info("RUN RESULT %s", json.dumps(result))
     if result.get("status") == "error":
         return 1

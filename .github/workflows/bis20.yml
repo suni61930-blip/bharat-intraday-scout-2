@@ -2,10 +2,9 @@ name: Bharat Intraday Scout 2.0
 
 on:
   schedule:
-    # Weekly universe refresh: Sunday 08:17 IST (= 02:47 UTC). Off-peak minute on purpose.
+    # Weekly universe refresh: Sunday 08:17 IST (= 02:47 UTC)
     - cron: '47 2 * * 0'
-    # Market scans, every 10 minutes, 09:47-14:37 IST (= 04:17-09:07 UTC), weekdays.
-    # Odd minutes (not :00/:05) because GitHub drops/delays cron jobs at busy marks.
+    # Market scans every 10 min, 09:47-14:37 IST (= 04:17-09:07 UTC), weekdays
     - cron: '17,27,37,47,57 4 * * 1-5'
     - cron: '7,17,27,37,47,57 5-8 * * 1-5'
     - cron: '7 9 * * 1-5'
@@ -41,19 +40,18 @@ jobs:
       TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
       TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
       # ---- strategy knobs ----
-      MOVER_MIN_PCT: '10'          # stock must be >= 10% from previous close
-      MOVER_RELAXED_PCT: '7'       # used after 11:30 IST only if no alert sent yet today
+      MOVER_MIN_PCT: '10'
+      MOVER_RELAXED_PCT: '7'
       MAX_SIGNALS_PER_DAY: '2'
       MIN_SCORE: '60'
       INTRADAY_UNIVERSE_SIZE: '600'
       MIN_AVG_TURNOVER_INR: '50000000'
       PRICE_FLOOR: '50'
-      # Kronos is OFF by default: it needs a ~1 GB PyTorch install and was gating every alert.
       KRONOS_ENABLED: 'false'
       KRONOS_REQUIRED: 'false'
       HF_HOME: ${{ github.workspace }}/.cache/huggingface
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           ref: main
 
@@ -74,7 +72,7 @@ jobs:
           fi
           echo "Selected: $(tail -n 1 "$GITHUB_OUTPUT")  (event=$EVENT_NAME cron=$SCHEDULE_CRON)"
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: '3.11'
           cache: 'pip'
@@ -97,7 +95,7 @@ jobs:
 
       - name: Upload dry-run report
         if: always() && steps.task.outputs.name == 'dry-run-v2'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: bis20-dry-run-report
           path: dry_run_v2_report.json
@@ -118,7 +116,6 @@ jobs:
             echo "No state changes."
           fi
 
-      # If anything above breaks, you get a Telegram message instead of silence.
       - name: Telegram failure alert
         if: failure() && github.event_name != 'workflow_dispatch'
         shell: bash

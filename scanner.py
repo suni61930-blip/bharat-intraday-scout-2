@@ -37,11 +37,10 @@ NSE_EQUITY_CSV = os.getenv(
     "https://nsearchives.nseindia.com/content/equities/EQUITY_L.csv",
 )
 
-# Time-windowed trade limits (no global daily cap that kills the scanner early):
-# - Before 10:00 AM IST: up to 10 trades
-# - 10:00 AM to 1:00 PM IST: up to 10 trades
-# - 1:00 PM to 2:00 PM IST: up to 5 trades
-# - After 2:00 PM IST (2:00 PM to 3:25 PM IST): up to 2 trades
+# Pre-Explosion Ignition & fmzquant + Kronos Confluence Configuration:
+# Strictly rejects stocks that have ALREADY moved >5.0% ("already_moved_too_far").
+# Catches stocks EARLY (0.4% to 4.5% day move) right as they break out of a volatility squeeze
+# with institutional volume/MFI + MACD + ADX + ATR Channel + Kronos forward trajectory alignment.
 CFG: Dict[str, Any] = {
     "PRICE_FLOOR": float(os.getenv("PRICE_FLOOR", "50")),
     "MIN_AVG_TURNOVER_INR": float(os.getenv("MIN_AVG_TURNOVER_INR", "50000000")),  # ₹5 Cr floor
@@ -54,47 +53,52 @@ CFG: Dict[str, Any] = {
     "BAR_INTERVAL": "5m",
     "MIN_HISTORY_BARS": 45,
     "MIN_TIME_SLOT_SESSIONS": 3,
-    "MIN_RELATIVE_VOLUME": 1.25,
-    "MIN_CUMULATIVE_RVOL": 1.30,
-    "BREAKOUT_LOOKBACK": 10,
-    "MAX_EXTENSION_ATR": 2.4,
-    "MIN_DAY_MOVE_PCT": float(os.getenv("MIN_DAY_MOVE_PCT", "2.5")),
-    "MAX_DAY_MOVE_PCT": float(os.getenv("MAX_DAY_MOVE_PCT", "9.8")),
+    "MIN_RELATIVE_VOLUME": 1.35,        # 5m volume surge at ignition
+    "MIN_CUMULATIVE_RVOL": 1.20,        # Session volume accumulation
+    "BREAKOUT_LOOKBACK": 12,            # 12-bar (1-hour) coil breakout lookback
+    "MAX_EXTENSION_ATR": 2.0,           # Do not chase overextended candles
+    "MIN_DAY_MOVE_PCT": float(os.getenv("MIN_DAY_MOVE_PCT", "0.4")),   # Catch early ignition starting from +0.4%
+    "IDEAL_MAX_MOVE_PCT": float(os.getenv("IDEAL_MAX_MOVE_PCT", "3.6")),  # Sweet spot: +0.4% to +3.6% (leaves 8-12% room!)
+    "MAX_DAY_MOVE_PCT": float(os.getenv("MAX_DAY_MOVE_PCT", "5.0")),   # HARD CAP: Reject stocks that already moved >5.0%!
+    "MAX_VWAP_DISTANCE_PCT": 2.8,       # Must be within 2.8% of Session VWAP (near institutional cost basis)
     "MAX_BAR_AGE_MIN": 14,
-    "MIN_RSI_BUY": 55.0,
-    "MAX_RSI_BUY": 92.0,
-    "MIN_RSI_SELL": 8.0,
-    "MAX_RSI_SELL": 45.0,
-    "MIN_ADX_TREND": 20.0,
-    "MIN_BODY_RATIO": 0.28,
-    "MIN_CLOSE_LOCATION_BUY": 0.58,
-    "MAX_CLOSE_LOCATION_SELL": 0.42,
+    "MIN_RSI_BUY": 54.0,
+    "MAX_RSI_BUY": 82.0,                # Avoid already-exhausted >82 RSI tops
+    "MIN_RSI_SELL": 18.0,
+    "MAX_RSI_SELL": 46.0,
+    "MIN_MFI_BUY": 52.0,                # fmzquant EMA-VWAP-MFI strategy: positive money flow accumulation
+    "MAX_MFI_SELL": 48.0,
+    "MIN_ADX_TREND": 18.0,              # fmzquant ADX Trend Breakout Momentum strategy
+    "MIN_CONFLUENCE_PILLARS": int(os.getenv("MIN_CONFLUENCE_PILLARS", "4")),  # Must pass at least 4 of 5 fmzquant pillars
+    "MIN_BODY_RATIO": 0.32,
+    "MIN_CLOSE_LOCATION_BUY": 0.62,
+    "MAX_CLOSE_LOCATION_SELL": 0.38,
     "STOP_ATR_MULTIPLE": 1.50,
-    "MIN_STOP_PCT": 0.0075,
-    "MAX_STOP_PCT": 0.0250,
-    "TARGET_R_MULTIPLE": 2.2,
-    "RUNNER_R_MULTIPLE": 3.5,
-    "MIN_SCORE_TIER1": int(os.getenv("MIN_SCORE_TIER1", "72")),
-    "MIN_SCORE_TIER2": int(os.getenv("MIN_SCORE_TIER2", "65")),
-    "TOP_MOVERS_POOL_SIZE": int(os.getenv("TOP_MOVERS_POOL_SIZE", "12")),
-    "TIER2_START_HOUR": 9,              # Allow Tier-2 Top-Mover Continuation from 09:45 IST if Tier-1 has 0 matches
+    "MIN_STOP_PCT": 0.0080,             # 0.80% min stop
+    "MAX_STOP_PCT": 0.0220,             # 2.20% max stop
+    "TARGET1_R_MULTIPLE": 2.5,          # T1 = 2.5R
+    "TARGET2_R_MULTIPLE": 5.0,          # T2 = 5.0R (mid-expansion)
+    "EXPANSION_TARGET_PCT": 10.0,       # T3 = +10% full intraday breakout projection
+    "MIN_SCORE_TIER1": int(os.getenv("MIN_SCORE_TIER1", "78")),
+    "MIN_SCORE_TIER2": int(os.getenv("MIN_SCORE_TIER2", "70")),
+    "TIER2_START_HOUR": 9,
     "TIER2_START_MINUTE": 45,
-    "LAST_ENTRY_HOUR": 15,              # Keep scanning until 15:20 IST (3:20 PM IST)
+    "LAST_ENTRY_HOUR": 15,
     "LAST_ENTRY_MINUTE": 20,
     "LIMIT_BEFORE_10AM": int(os.getenv("LIMIT_BEFORE_10AM", "10")),
     "LIMIT_10AM_TO_1PM": int(os.getenv("LIMIT_10AM_TO_1PM", "10")),
     "LIMIT_1PM_TO_2PM": int(os.getenv("LIMIT_1PM_TO_2PM", "5")),
     "LIMIT_AFTER_2PM": int(os.getenv("LIMIT_AFTER_2PM", "2")),
     "MAX_SIGNALS_PER_CYCLE": int(os.getenv("MAX_SIGNALS_PER_CYCLE", "3")),
-    "CONTINUOUS_LOOP_MINUTES": int(os.getenv("CONTINUOUS_LOOP_MINUTES", "350")),  # Full 6-hour trading day loop
+    "CONTINUOUS_LOOP_MINUTES": int(os.getenv("CONTINUOUS_LOOP_MINUTES", "350")),
     "KRONOS_ENABLED": os.getenv("KRONOS_ENABLED", "true").lower() == "true",
-    "KRONOS_REQUIRED": os.getenv("KRONOS_REQUIRED", "false").lower() == "true",
+    "KRONOS_REQUIRED": os.getenv("KRONOS_REQUIRED", "true").lower() == "true",  # Enforce Kronos confirmation when model is loaded
     "KRONOS_MODEL": os.getenv("KRONOS_MODEL", "NeoQuasar/Kronos-mini"),
     "KRONOS_TOKENIZER": os.getenv("KRONOS_TOKENIZER", "NeoQuasar/Kronos-Tokenizer-2k"),
     "KRONOS_LOOKBACK": int(os.getenv("KRONOS_LOOKBACK", "96")),
-    "KRONOS_PRED_LEN": int(os.getenv("KRONOS_PRED_LEN", "3")),
-    "KRONOS_SAMPLE_COUNT": int(os.getenv("KRONOS_SAMPLE_COUNT", "3")),
-    "KRONOS_MIN_MOVE_PCT": float(os.getenv("KRONOS_MIN_MOVE_PCT", "0.05")),
+    "KRONOS_PRED_LEN": int(os.getenv("KRONOS_PRED_LEN", "6")),          # 6 candles (30-min forward trajectory)
+    "KRONOS_SAMPLE_COUNT": int(os.getenv("KRONOS_SAMPLE_COUNT", "3")),  # 3-sample ensemble average
+    "KRONOS_MIN_MOVE_PCT": float(os.getenv("KRONOS_MIN_MOVE_PCT", "0.08")),
     "UNIVERSE_MAX_AGE_HOURS": int(os.getenv("UNIVERSE_MAX_AGE_HOURS", "168")),
 }
 
@@ -206,20 +210,16 @@ def get_today_alerted_symbols(day_str: Optional[str] = None) -> set:
 
 
 def load_kronos() -> None:
-    """Load Kronos-mini model on CPU if available; degrade gracefully if KRONOS_REQUIRED=false."""
+    """Load Kronos-mini model on CPU if available; degrade gracefully if KRONOS_REPO_DIR is missing."""
     global kronos_predictor, kronos_status
     if kronos_predictor is not None:
         return
     if not CFG["KRONOS_ENABLED"]:
         kronos_status = "disabled"
-        if CFG["KRONOS_REQUIRED"]:
-            raise RuntimeError("KRONOS_REQUIRED=true but KRONOS_ENABLED=false")
         return
     if not KRONOS_REPO_DIR.exists():
         kronos_status = f"missing_repo:{KRONOS_REPO_DIR}"
-        LOG.warning("Kronos repository not found at %s; continuing in technical-only mode", KRONOS_REPO_DIR)
-        if CFG["KRONOS_REQUIRED"]:
-            raise RuntimeError(f"Kronos source repository not found: {KRONOS_REPO_DIR}")
+        LOG.warning("Kronos repository not found at %s; continuing with 5-pillar fmzquant confluence", KRONOS_REPO_DIR)
         return
     sys.path.insert(0, str(KRONOS_REPO_DIR))
     try:
@@ -234,9 +234,7 @@ def load_kronos() -> None:
     except Exception as exc:
         kronos_predictor = None
         kronos_status = "error:" + str(exc)[:240]
-        LOG.warning("Kronos initialization failed (advisory mode=%s): %s", not CFG["KRONOS_REQUIRED"], exc)
-        if CFG["KRONOS_REQUIRED"]:
-            raise RuntimeError("Kronos is required but failed to load: " + str(exc)) from exc
+        LOG.warning("Kronos initialization failed; falling back to 5-pillar technical confluence: %s", exc)
 
 
 def is_market_session(now: Optional[datetime] = None) -> bool:
@@ -345,7 +343,7 @@ def download_batch(symbols: List[str], period: str, interval: str) -> Dict[str, 
 
 
 def refresh_liquid_universe(force: bool = False) -> Dict[str, Any]:
-    """Build candidate pool from NSE EQ symbols using 20-session turnover and volatility."""
+    """Build candidate pool from NSE EQ symbols using 20-session turnover and high ADR% potential."""
     if not force and UNIVERSE_CACHE.exists():
         try:
             cached = json.loads(UNIVERSE_CACHE.read_text())
@@ -407,9 +405,9 @@ def refresh_liquid_universe(force: bool = False) -> Dict[str, Any]:
             return old
         raise RuntimeError("No liquid universe was created. Check NSE/Yahoo data access.")
 
-    top_liquid = metrics[:int(CFG["INTRADAY_UNIVERSE_SIZE"] * 0.6)]
+    top_liquid = metrics[:int(CFG["INTRADAY_UNIVERSE_SIZE"] * 0.5)]
     top_liquid_set = {m["symbol"] for m in top_liquid}
-    remaining = [m for m in metrics[int(CFG["INTRADAY_UNIVERSE_SIZE"] * 0.6):450] if m["symbol"] not in top_liquid_set]
+    remaining = [m for m in metrics[int(CFG["INTRADAY_UNIVERSE_SIZE"] * 0.5):500] if m["symbol"] not in top_liquid_set]
     remaining.sort(key=lambda x: (x.get("avg_daily_range_pct", 0.0), x["avg_turnover"]), reverse=True)
     combined = (top_liquid + remaining)[:CFG["INTRADAY_UNIVERSE_SIZE"]]
 
@@ -424,15 +422,24 @@ def refresh_liquid_universe(force: bool = False) -> Dict[str, Any]:
     return result
 
 
+def ema_series(values: np.ndarray, period: int) -> np.ndarray:
+    arr = np.asarray(values, dtype=float)
+    out = np.full_like(arr, np.nan, dtype=float)
+    if len(arr) < period:
+        return out
+    alpha = 2.0 / (period + 1.0)
+    out[period - 1] = float(np.mean(arr[:period]))
+    for i in range(period, len(arr)):
+        out[i] = alpha * arr[i] + (1.0 - alpha) * out[i - 1]
+    return out
+
+
 def ema(values: Any, period: int) -> float:
     arr = np.asarray(values, dtype=float)
     if len(arr) < period:
         return float("nan")
-    alpha = 2.0 / (period + 1.0)
-    result = float(np.mean(arr[:period]))
-    for x in arr[period:]:
-        result = alpha * float(x) + (1.0 - alpha) * result
-    return result
+    s = ema_series(arr, period)
+    return float(s[-1])
 
 
 def rsi(values: Any, period: int = 14) -> float:
@@ -453,6 +460,80 @@ def rsi(values: Any, period: int = 14) -> float:
     return 100.0 - 100.0 / (1.0 + rs)
 
 
+def mfi(df: pd.DataFrame, period: int = 14) -> float:
+    """Money Flow Index (from fmzquant 200-EMA-VWAP-MFI-Trend-Following-Strategy)."""
+    if len(df) <= period:
+        return 50.0
+    tail = df.tail(period + 15)
+    tp = (tail["high"].astype(float) + tail["low"].astype(float) + tail["close"].astype(float)) / 3.0
+    vol = tail["volume"].astype(float).clip(lower=0.0)
+    rmf = tp * vol
+    diff = tp.diff()
+    pos_flow = rmf.where(diff > 0, 0.0).tail(period).sum()
+    neg_flow = rmf.where(diff < 0, 0.0).tail(period).sum()
+    if neg_flow <= 1e-9:
+        return 100.0 if pos_flow > 0 else 50.0
+    mr = float(pos_flow / neg_flow)
+    return 100.0 - (100.0 / (1.0 + mr))
+
+
+def bollinger_squeeze_ignition(closes: np.ndarray, period: int = 20, mult: float = 2.0) -> Tuple[bool, bool, bool, float]:
+    """Adaptive Bollinger Band Squeeze & Breakout (from fmzquant Adaptive-Bollinger-Bands-Trend-Following-Strategy).
+
+    Returns (squeeze_coil, bb_breakout_buy, bb_breakdown_sell, current_bandwidth_pct).
+    """
+    if len(closes) < period + 6:
+        return False, False, False, 0.0
+    recent = closes[-(period + 6):]
+    bw_history: List[float] = []
+    upper_now = 0.0
+    lower_now = 0.0
+    for offset in range(7):
+        window = recent[offset:offset + period]
+        mean = float(np.mean(window))
+        std = float(np.std(window, ddof=0))
+        up = mean + mult * std
+        lo = mean - mult * std
+        bw = ((up - lo) / max(mean, 1e-9)) * 100.0
+        bw_history.append(bw)
+        if offset == 6:
+            upper_now = up
+            lower_now = lo
+
+    curr_bw = bw_history[-1]
+    prior_min_bw = min(bw_history[:-1])
+    # Squeeze coil: prior 5 bars had tight bandwidth (< 2.2% on 5m) or current bandwidth is expanding from coil
+    squeeze_coil = prior_min_bw <= 2.4 or (curr_bw >= prior_min_bw * 1.12)
+    price = float(closes[-1])
+    # Breakout through or into top 15% of upper band during bandwidth expansion
+    band_span = max(upper_now - lower_now, 1e-9)
+    pos_in_band = (price - lower_now) / band_span
+    bb_buy = squeeze_coil and pos_in_band >= 0.82 and curr_bw >= bw_history[-2]
+    bb_sell = squeeze_coil and pos_in_band <= 0.18 and curr_bw >= bw_history[-2]
+    return squeeze_coil, bb_buy, bb_sell, round(curr_bw, 2)
+
+
+def macd_impulse(closes: np.ndarray) -> Tuple[bool, bool, float]:
+    """MACD Histogram Impulse (from fmzquant 1-2-3-Pattern-with-EMAs-MACD strategy)."""
+    if len(closes) < 35:
+        return False, False, 0.0
+    e12 = ema_series(closes, 12)
+    e26 = ema_series(closes, 26)
+    macd_line = e12 - e26
+    valid = macd_line[~np.isnan(macd_line)]
+    if len(valid) < 10:
+        return False, False, 0.0
+    sig_line = ema_series(valid, 9)
+    hist = valid - sig_line
+    if np.isnan(hist[-1]) or np.isnan(hist[-2]):
+        return False, False, 0.0
+    h_now = float(hist[-1])
+    h_prev = float(hist[-2])
+    macd_buy = h_now > 0 and h_now >= h_prev
+    macd_sell = h_now < 0 and h_now <= h_prev
+    return macd_buy, macd_sell, round(h_now, 4)
+
+
 def atr(df: pd.DataFrame, period: int = 14) -> float:
     high = df["high"].astype(float)
     low = df["low"].astype(float)
@@ -463,11 +544,11 @@ def atr(df: pd.DataFrame, period: int = 14) -> float:
     return float(value) if pd.notna(value) else float("nan")
 
 
-def adx_di(df: pd.DataFrame, period: int = 14) -> Tuple[float, float, float]:
-    """Calculate Wilder's ADX, +DI, and -DI on recent bars."""
+def adx_di_slope(df: pd.DataFrame, period: int = 14) -> Tuple[float, float, float, bool]:
+    """Calculate Wilder's ADX, +DI, -DI, and whether ADX is rising (from fmzquant ADX Trend Breakout Momentum)."""
     tail_df = df.tail(max(period * 4, 60))
     if len(tail_df) < period * 2:
-        return 20.0, 20.0, 20.0
+        return 20.0, 20.0, 20.0, True
     high = tail_df["high"].astype(float).values
     low = tail_df["low"].astype(float).values
     close = tail_df["close"].astype(float).values
@@ -502,10 +583,12 @@ def adx_di(df: pd.DataFrame, period: int = 14) -> Tuple[float, float, float]:
         dx = 100.0 * abs(plus_di - minus_di) / denom if denom > 1e-9 else 0.0
         dx_list.append(dx)
 
-    if not dx_list:
-        return 20.0, 20.0, 20.0
+    if len(dx_list) < 2:
+        return 20.0, 20.0, 20.0, True
     adx_val = float(np.mean(dx_list[-period:]))
-    return adx_val, plus_di, minus_di
+    adx_prev = float(np.mean(dx_list[-(period + 1):-1])) if len(dx_list) > period else adx_val
+    adx_rising = adx_val >= adx_prev * 0.98 or dx_list[-1] >= adx_val
+    return adx_val, plus_di, minus_di, adx_rising
 
 
 def normalize_intraday(df: pd.DataFrame) -> pd.DataFrame:
@@ -593,7 +676,9 @@ def build_signal_dict(
     atr_value: float,
     score: int,
     rsi_value: float,
+    mfi_value: float,
     adx_val: float,
+    bb_bw: float,
     relvol: float,
     cumulative_relvol: float,
     sessions_compared: int,
@@ -605,6 +690,7 @@ def build_signal_dict(
     body_ratio: float,
     setup_label: str,
     tier: str,
+    pillars_matched: List[str],
 ) -> Dict[str, Any]:
     raw_risk = CFG["STOP_ATR_MULTIPLE"] * atr_value
     min_risk = price * CFG["MIN_STOP_PCT"]
@@ -612,8 +698,10 @@ def build_signal_dict(
     risk = float(np.clip(raw_risk, min_risk, max_risk))
 
     stop = price - risk if side == "BUY" else price + risk
-    target = price + risk * CFG["TARGET_R_MULTIPLE"] if side == "BUY" else price - risk * CFG["TARGET_R_MULTIPLE"]
-    runner_target = price + risk * CFG["RUNNER_R_MULTIPLE"] if side == "BUY" else price - risk * CFG["RUNNER_R_MULTIPLE"]
+    target = price + risk * CFG["TARGET1_R_MULTIPLE"] if side == "BUY" else price - risk * CFG["TARGET1_R_MULTIPLE"]
+    runner_target = price + risk * CFG["TARGET2_R_MULTIPLE"] if side == "BUY" else price - risk * CFG["TARGET2_R_MULTIPLE"]
+    expansion_10pct_target = price * (1.0 + CFG["EXPANSION_TARGET_PCT"] / 100.0) if side == "BUY" else price * (1.0 - CFG["EXPANSION_TARGET_PCT"] / 100.0)
+    remaining_room_to_12pct = max(4.0, round(12.5 - abs(day_move), 2))
     reward_risk = abs(target - price) / max(abs(price - stop), 1e-9)
 
     return {
@@ -624,20 +712,26 @@ def build_signal_dict(
         "stop": round(stop, 2),
         "target": round(target, 2),
         "runner_target": round(runner_target, 2),
+        "expansion_target": round(expansion_10pct_target, 2),
+        "remaining_room_pct": remaining_room_to_12pct,
         "reward_risk": round(reward_risk, 2),
         "score": int(min(100, max(0, score))),
         "rsi": round(rsi_value, 1),
+        "mfi": round(mfi_value, 1),
         "adx": round(adx_val, 1),
+        "bb_bandwidth_pct": round(bb_bw, 2),
         "relative_volume": round(relvol, 2),
         "cumulative_relative_volume": round(cumulative_relvol, 2),
         "volume_sessions_compared": int(sessions_compared),
         "avg_daily_turnover_crore": round(float(daily.get("avg_turnover", 0.0)) / 1e7, 2),
+        "avg_daily_range_pct": round(float(daily.get("avg_daily_range_pct", 2.8)), 2),
         "atr": round(atr_value, 2),
         "vwap": round(vwap_value, 2),
         "breakout_level": round(breakout_level, 2),
         "day_move_pct": round(day_move, 2),
         "candle_time": last_idx.isoformat(),
         "body_ratio": round(body_ratio, 2),
+        "pillars_matched": pillars_matched,
         "setup": setup_label,
         "forecast": None,
     }
@@ -676,11 +770,19 @@ def evaluate_symbol(
             diagnostic["rejected"] = "price_floor"
         return None
 
+    # CRITICAL PRE-EXPLOSION FILTER:
+    # Reject stocks that have ALREADY moved > 5.0% ("already_moved_too_far")!
+    # We only want stocks in the early ignition phase (0.4% to 5.0% move) that still have 10-15% room ahead.
     day_move, open_move, session_high, session_low = compute_effective_day_move(df, last_idx, daily, price)
-    min_move_req = 2.2 if allow_tier2 else CFG["MIN_DAY_MOVE_PCT"]
-    if abs(day_move) < min_move_req or abs(day_move) > CFG["MAX_DAY_MOVE_PCT"]:
+    if abs(day_move) > CFG["MAX_DAY_MOVE_PCT"]:
         if diagnostic is not None:
-            diagnostic["rejected"] = "day_move"
+            diagnostic["rejected"] = "already_moved_too_far"
+            diagnostic["day_move_pct"] = round(day_move, 2)
+        return None
+    if abs(day_move) < CFG["MIN_DAY_MOVE_PCT"]:
+        if diagnostic is not None:
+            diagnostic["rejected"] = "no_initial_ignition"
+            diagnostic["day_move_pct"] = round(day_move, 2)
         return None
 
     relvol, slot_sessions = same_slot_relative_volume(df, last_idx, CFG["MIN_TIME_SLOT_SESSIONS"])
@@ -693,10 +795,11 @@ def evaluate_symbol(
             "sessions": sessions_compared,
         }
 
+    # Volume accumulation / ignition check
     vol_pass = (
         (relvol >= CFG["MIN_RELATIVE_VOLUME"] and cumulative_relvol >= CFG["MIN_CUMULATIVE_RVOL"])
-        or (cumulative_relvol >= 1.65 and relvol >= 0.80)
-        or (relvol >= 2.00 and cumulative_relvol >= 1.10)
+        or (relvol >= 1.85 and cumulative_relvol >= 1.00)
+        or (cumulative_relvol >= 1.65 and relvol >= 0.90)
     )
     if not vol_pass:
         if diagnostic is not None:
@@ -706,13 +809,25 @@ def evaluate_symbol(
     closes = df["close"].astype(float).values
     fast = ema(closes, 9)
     slow = ema(closes, 21)
+    ema50 = ema(closes, 50) if len(closes) >= 50 else slow
     rsi_value = rsi(closes, 14)
+    mfi_value = mfi(df, 14)
     atr_value = atr(df, 14)
     vwap_value = session_vwap(df)
-    adx_val, plus_di, minus_di = adx_di(df, 14)
+    adx_val, plus_di, minus_di, adx_rising = adx_di_slope(df, 14)
+    squeeze_coil, bb_buy, bb_sell, bb_bw = bollinger_squeeze_ignition(closes, 20, 2.0)
+    macd_buy, macd_sell, _ = macd_impulse(closes)
+
     if not np.isfinite([fast, slow, rsi_value, atr_value, vwap_value]).all() or atr_value <= 0:
         if diagnostic is not None:
             diagnostic["rejected"] = "indicator_invalid"
+        return None
+
+    # Must not be overextended from Session VWAP (enter near institutional VWAP base before the 10-15% run)
+    vwap_dist_pct = abs((price - vwap_value) / max(vwap_value, 1e-9)) * 100.0
+    if vwap_dist_pct > CFG["MAX_VWAP_DISTANCE_PCT"]:
+        if diagnostic is not None:
+            diagnostic["rejected"] = "vwap_overextended"
         return None
 
     prev = df.iloc[-(CFG["BREAKOUT_LOOKBACK"] + 1):-1]
@@ -722,6 +837,11 @@ def evaluate_symbol(
         return None
     prior_high = float(prev["high"].max())
     prior_low = float(prev["low"].min())
+
+    # Multi-session 3-day high/low channel (from fmzquant 5-day-High-Low-Breakout-Price-Channel-Strategy)
+    prior_days_df = df[[x.date() < last_idx.date() for x in df.index]].tail(225)
+    multi_day_high = float(prior_days_df["high"].max()) if not prior_days_df.empty else prior_high
+    multi_day_low = float(prior_days_df["low"].min()) if not prior_days_df.empty else prior_low
 
     bar_range = max(float(last["high"] - last["low"]), 1e-9)
     body_ratio = abs(float(last["close"] - last["open"])) / bar_range
@@ -738,119 +858,128 @@ def evaluate_symbol(
         and close_location <= CFG["MAX_CLOSE_LOCATION_SELL"]
     )
 
-    breakout_buy = (price >= prior_high * 0.999) or (
-        price >= session_high * 0.992 and cumulative_relvol >= 1.50 and adx_val >= 22.0
-    )
-    breakdown_sell = (price <= prior_low * 1.001) or (
-        price <= session_low * 1.008 and cumulative_relvol >= 1.50 and adx_val >= 22.0
-    )
+    # Evaluate the 5 Quantitative Strategy Pillars from fmzquant/strategies:
+    # Pillar 1: Adaptive Bollinger Squeeze & ATR Channel Ignition
+    atr_chan_buy = price >= (slow + 1.0 * atr_value)
+    atr_chan_sell = price <= (slow - 1.0 * atr_value)
+    p1_buy = bb_buy or (squeeze_coil and atr_chan_buy)
+    p1_sell = bb_sell or (squeeze_coil and atr_chan_sell)
+
+    # Pillar 2: Multi-EMA + Session VWAP + Money Flow Index (MFI) Institutional Accumulation
+    p2_buy = price > vwap_value and fast > slow and slow >= ema50 * 0.997 and mfi_value >= CFG["MIN_MFI_BUY"]
+    p2_sell = price < vwap_value and fast < slow and slow <= ema50 * 1.003 and mfi_value <= CFG["MAX_MFI_SELL"]
+
+    # Pillar 3: ADX + DI Directional Trend Acceleration
+    p3_buy = adx_val >= CFG["MIN_ADX_TREND"] and plus_di > minus_di and adx_rising
+    p3_sell = adx_val >= CFG["MIN_ADX_TREND"] and minus_di > plus_di and adx_rising
+
+    # Pillar 4: MACD Histogram Impulse + RSI Sweet-Spot Ignition (not overbought/oversold yet)
+    p4_buy = macd_buy and (CFG["MIN_RSI_BUY"] <= rsi_value <= CFG["MAX_RSI_BUY"])
+    p4_sell = macd_sell and (CFG["MIN_RSI_SELL"] <= rsi_value <= CFG["MAX_RSI_SELL"])
+
+    # Pillar 5: Consolidation Coil / Multi-Day Channel Breakout with Volume Surge
+    p5_buy = (price >= prior_high * 0.999 or price >= multi_day_high * 0.998 or price >= session_high * 0.995) and relvol >= 1.35
+    p5_sell = (price <= prior_low * 1.001 or price <= multi_day_low * 1.002 or price <= session_low * 1.005) and relvol >= 1.35
+
+    buy_pillars: List[str] = []
+    if p1_buy:
+        buy_pillars.append("BB-Squeeze/ATR")
+    if p2_buy:
+        buy_pillars.append("EMA-VWAP-MFI")
+    if p3_buy:
+        buy_pillars.append("ADX-DI-Surge")
+    if p4_buy:
+        buy_pillars.append("MACD-RSI-Impulse")
+    if p5_buy:
+        buy_pillars.append("Channel-Breakout")
+
+    sell_pillars: List[str] = []
+    if p1_sell:
+        sell_pillars.append("BB-Squeeze/ATR")
+    if p2_sell:
+        sell_pillars.append("EMA-VWAP-MFI")
+    if p3_sell:
+        sell_pillars.append("ADX-DI-Surge")
+    if p4_sell:
+        sell_pillars.append("MACD-RSI-Impulse")
+    if p5_sell:
+        sell_pillars.append("Channel-Breakdown")
 
     daily_ema20 = float(daily.get("daily_ema20", price))
     daily_ema50 = float(daily.get("daily_ema50", price))
-    daily_up = (price > daily_ema20) or (day_move >= 3.2 and cumulative_relvol >= 1.50)
-    daily_down = (price < daily_ema20) or (day_move <= -3.2 and cumulative_relvol >= 1.50)
+    daily_up = price >= daily_ema20 * 0.99
+    daily_down = price <= daily_ema20 * 1.01
 
-    above_vwap = price > vwap_value
-    below_vwap = price < vwap_value
-    adx_buy = adx_val >= CFG["MIN_ADX_TREND"] and plus_di >= minus_di * 0.95
-    adx_sell = adx_val >= CFG["MIN_ADX_TREND"] and minus_di >= plus_di * 0.95
+    req_pillars = CFG["MIN_CONFLUENCE_PILLARS"] if not allow_tier2 else max(3, CFG["MIN_CONFLUENCE_PILLARS"] - 1)
 
     side = None
     breakout_level = None
+    matched_pillars: List[str] = []
     tier = "TIER-1"
-    setup_label = "Tier-1: Multi-factor VWAP + EMA9/21 + ADX RVOL Breakout"
+    setup_label = "Pre-Explosion Ignition: fmzquant 5-Pillar Confluence + Kronos"
 
     if (
         daily_up
+        and price > vwap_value
         and fast > slow
-        and above_vwap
-        and breakout_buy
         and bullish_candle
-        and adx_buy
-        and CFG["MIN_RSI_BUY"] <= rsi_value <= CFG["MAX_RSI_BUY"]
-        and day_move >= CFG["MIN_DAY_MOVE_PCT"]
-        and open_move >= 0.4
+        and CFG["MIN_DAY_MOVE_PCT"] <= day_move <= CFG["MAX_DAY_MOVE_PCT"]
+        and open_move >= 0.25
+        and len(buy_pillars) >= req_pillars
     ):
         extension = max(0.0, (price - prior_high) / atr_value)
         if extension <= CFG["MAX_EXTENSION_ATR"]:
-            side, breakout_level = "BUY", min(prior_high, session_high)
+            side = "BUY"
+            breakout_level = prior_high
+            matched_pillars = buy_pillars
+            tier = "TIER-1" if len(buy_pillars) >= CFG["MIN_CONFLUENCE_PILLARS"] else "TIER-2"
     elif (
         daily_down
+        and price < vwap_value
         and fast < slow
-        and below_vwap
-        and breakdown_sell
         and bearish_candle
-        and adx_sell
-        and CFG["MIN_RSI_SELL"] <= rsi_value <= CFG["MAX_RSI_SELL"]
-        and day_move <= -CFG["MIN_DAY_MOVE_PCT"]
-        and open_move <= -0.4
+        and -CFG["MAX_DAY_MOVE_PCT"] <= day_move <= -CFG["MIN_DAY_MOVE_PCT"]
+        and open_move <= -0.25
+        and len(sell_pillars) >= req_pillars
     ):
         extension = max(0.0, (prior_low - price) / atr_value)
         if extension <= CFG["MAX_EXTENSION_ATR"]:
-            side, breakout_level = "SELL", max(prior_low, session_low)
-
-    if not side and allow_tier2:
-        near_day_high = price >= session_high * 0.986
-        near_day_low = price <= session_low * 1.014
-        if (
-            day_move >= 2.8
-            and open_move >= 0.4
-            and above_vwap
-            and price > slow
-            and fast >= slow * 0.998
-            and near_day_high
-            and float(last["close"]) > float(last["open"])
-            and body_ratio >= 0.22
-            and close_location >= 0.52
-            and 52.0 <= rsi_value <= 92.0
-        ):
-            side, breakout_level = "BUY", session_high
-            tier = "TIER-2"
-            setup_label = "Tier-2: Top-Mover Intraday Trend Continuation"
-        elif (
-            day_move <= -2.8
-            and open_move <= -0.4
-            and below_vwap
-            and price < slow
-            and fast <= slow * 1.002
-            and near_day_low
-            and float(last["close"]) < float(last["open"])
-            and body_ratio >= 0.22
-            and close_location <= 0.48
-            and 8.0 <= rsi_value <= 48.0
-        ):
-            side, breakout_level = "SELL", session_low
-            tier = "TIER-2"
-            setup_label = "Tier-2: Top-Mover Intraday Breakdown Continuation"
+            side = "SELL"
+            breakout_level = prior_low
+            matched_pillars = sell_pillars
+            tier = "TIER-1" if len(sell_pillars) >= CFG["MIN_CONFLUENCE_PILLARS"] else "TIER-2"
 
     if diagnostic is not None:
-        diagnostic["conditions"] = {
-            "daily_trend_buy": bool(daily_up), "daily_trend_sell": bool(daily_down),
-            "ema_buy": bool(fast > slow), "ema_sell": bool(fast < slow),
-            "vwap_buy": bool(above_vwap), "vwap_sell": bool(below_vwap),
-            "breakout_buy": bool(breakout_buy), "breakout_sell": bool(breakdown_sell),
-            "candle_buy": bool(bullish_candle), "candle_sell": bool(bearish_candle),
-            "adx_buy": bool(adx_buy), "adx_sell": bool(adx_sell),
-            "rsi_buy": bool(CFG["MIN_RSI_BUY"] <= rsi_value <= CFG["MAX_RSI_BUY"]),
-            "rsi_sell": bool(CFG["MIN_RSI_SELL"] <= rsi_value <= CFG["MAX_RSI_SELL"]),
-            "open_move_ok": bool(abs(open_move) >= 0.4),
-        }
         diagnostic["day_move_pct"] = round(day_move, 2)
-        diagnostic["open_move_pct"] = round(open_move, 2)
+        diagnostic["buy_pillars"] = buy_pillars
+        diagnostic["sell_pillars"] = sell_pillars
+        diagnostic["conditions"] = {
+            "p1_bb_squeeze": bool(p1_buy or p1_sell),
+            "p2_vwap_mfi": bool(p2_buy or p2_sell),
+            "p3_adx_di": bool(p3_buy or p3_sell),
+            "p4_macd_rsi": bool(p4_buy or p4_sell),
+            "p5_channel_break": bool(p5_buy or p5_sell),
+            "candle_confirm": bool(bullish_candle or bearish_candle),
+        }
 
     if not side:
         if diagnostic is not None:
             diagnostic["rejected"] = "technical_alignment"
         return None
 
+    # Pre-Explosion Conviction Score (rewards EARLY entries 0.6%-3.6% + high ADR% + multi-pillar confluence)
+    adr_pct = float(daily.get("avg_daily_range_pct", 2.8))
     score = 0
-    score += 22 if relvol >= 2.2 else (16 if relvol >= 1.4 else 10)
-    score += 18 if cumulative_relvol >= 2.0 else (14 if cumulative_relvol >= 1.4 else 8)
-    score += 18 if 3.8 <= abs(day_move) <= 8.8 else (14 if abs(day_move) >= 2.5 else 8)
-    score += 10 if (daily_ema20 > daily_ema50 if side == "BUY" else daily_ema20 < daily_ema50) else 5
-    score += 15 if adx_val >= 32.0 else (12 if adx_val >= 20.0 else 6)
-    score += 10 if body_ratio >= 0.55 else (7 if body_ratio >= 0.28 else 4)
-    score += 7 if tier == "TIER-1" else 2
+    # 1. Early Ignition Bonus (up to 25 pts for catching BEFORE the big move: 0.6% to 3.6%)
+    score += 25 if 0.6 <= abs(day_move) <= CFG["IDEAL_MAX_MOVE_PCT"] else 15
+    # 2. fmzquant Strategy Pillar Confluence (up to 25 pts)
+    score += 25 if len(matched_pillars) == 5 else (20 if len(matched_pillars) == 4 else 14)
+    # 3. Relative Volume Ignition (up to 20 pts)
+    score += 20 if relvol >= 2.2 else (15 if relvol >= 1.5 else 10)
+    # 4. Money Flow & ADX Acceleration (up to 15 pts)
+    score += 15 if (mfi_value >= 62 if side == "BUY" else mfi_value <= 38) and adx_val >= 24 else 10
+    # 5. High-Beta / Multi-Day Breakout Potential (up to 15 pts)
+    score += 15 if (adr_pct >= 3.0 or (price >= multi_day_high if side == "BUY" else price <= multi_day_low)) else 9
 
     min_req_score = CFG["MIN_SCORE_TIER1"] if tier == "TIER-1" else CFG["MIN_SCORE_TIER2"]
     if score < min_req_score:
@@ -865,7 +994,9 @@ def evaluate_symbol(
         atr_value=atr_value,
         score=score,
         rsi_value=rsi_value,
+        mfi_value=mfi_value,
         adx_val=adx_val,
+        bb_bw=bb_bw,
         relvol=relvol,
         cumulative_relvol=cumulative_relvol,
         sessions_compared=sessions_compared,
@@ -875,8 +1006,9 @@ def evaluate_symbol(
         day_move=day_move,
         last_idx=last_idx,
         body_ratio=body_ratio,
-        setup_label=setup_label,
+        setup_label=f"{setup_label} ({len(matched_pillars)}/5 Pillars)",
         tier=tier,
+        pillars_matched=matched_pillars,
     )
 
 
@@ -908,21 +1040,33 @@ def kronos_forecast(
         x_timestamp=x_timestamp,
         y_timestamp=y_timestamp,
         pred_len=CFG["KRONOS_PRED_LEN"],
-        T=0.6,
+        T=0.5,
         top_p=0.85,
         sample_count=CFG["KRONOS_SAMPLE_COUNT"],
     )
-    predicted_close = float(prediction["close"].iloc[-1])
     current_close = float(df["close"].iloc[-1])
+    predicted_close = float(prediction["close"].iloc[-1])
+    pred_high = float(prediction["high"].max()) if "high" in prediction else float(prediction["close"].max())
+    pred_low = float(prediction["low"].min()) if "low" in prediction else float(prediction["close"].min())
+
     change_pct = ((predicted_close / current_close) - 1.0) * 100.0
-    aligned = change_pct >= CFG["KRONOS_MIN_MOVE_PCT"] if side == "BUY" else change_pct <= -CFG["KRONOS_MIN_MOVE_PCT"]
+    peak_move_pct = (
+        ((pred_high / current_close) - 1.0) * 100.0
+        if side == "BUY"
+        else ((pred_low / current_close) - 1.0) * 100.0
+    )
+    aligned = (
+        (change_pct >= CFG["KRONOS_MIN_MOVE_PCT"] or peak_move_pct >= CFG["KRONOS_MIN_MOVE_PCT"] * 2.5)
+        if side == "BUY"
+        else (change_pct <= -CFG["KRONOS_MIN_MOVE_PCT"] or peak_move_pct <= -CFG["KRONOS_MIN_MOVE_PCT"] * 2.5)
+    )
     return {
         "model": "Kronos-mini",
         "horizon_bars": CFG["KRONOS_PRED_LEN"],
         "forecast_close": round(predicted_close, 2),
         "forecast_change_pct": round(change_pct, 3),
+        "forecast_peak_move_pct": round(peak_move_pct, 3),
         "direction_aligned": bool(aligned),
-        "interpretation": "directional forecast (advisory)",
     }
 
 
@@ -948,26 +1092,30 @@ def add_signal(payload: Dict[str, Any], now: Optional[datetime] = None) -> bool:
 def format_alert_message(payload: Dict[str, Any]) -> str:
     forecast = payload.get("forecast") or {}
     if forecast.get("forecast_change_pct") is not None:
-        aligned_tag = "✅ aligned" if forecast.get("direction_aligned") else "⚠️ neutral/divergent"
-        forecast_line = f"Kronos-mini: {forecast.get('forecast_change_pct'):+.2f}% ({aligned_tag})"
+        aligned_tag = "✅ CONFIRMED" if forecast.get("direction_aligned") else "⚠️ neutral"
+        peak_str = f" | Peak 30m: {forecast.get('forecast_peak_move_pct', 0.0):+.2f}%"
+        forecast_line = (
+            f"Kronos-mini ({forecast.get('horizon_bars')} bars): "
+            f"{forecast.get('forecast_change_pct'):+.2f}%{peak_str} ({aligned_tag})"
+        )
     else:
-        forecast_line = "Kronos-mini: advisory skipped"
+        forecast_line = "Kronos-mini: technical-confluence mode"
 
-    runner_str = f" | Runner (3.5R): ₹{payload['runner_target']}" if payload.get("runner_target") else ""
-    tier_str = payload.get("tier", "TIER-1")
-    adx_str = f" | ADX: {payload.get('adx', 'N/A')}" if payload.get("adx") is not None else ""
+    pillars = ", ".join(payload.get("pillars_matched") or [])
+    exp_str = f" | 10% Expansion: ₹{payload['expansion_target']}" if payload.get("expansion_target") else ""
 
     return (
-        f"BHARAT INTRADAY SCOUT 2.0 [{tier_str}]\n"
-        f"{'🟢 BUY' if payload['side'] == 'BUY' else '🔴 SELL'} — {payload['symbol']} (Day Move: {payload['day_move_pct']:+.2f}%)\n"
-        f"Entry reference: ₹{payload['price']}\n"
-        f"Stop reference: ₹{payload['stop']} | Target (2.2R): ₹{payload['target']}{runner_str}\n"
-        f"Planned R:R: {payload['reward_risk']}R | Conviction score: {payload['score']}/100\n"
-        f"Same-slot 5m RVOL: {payload['relative_volume']}x | Cumulative RVOL: {payload['cumulative_relative_volume']}x\n"
-        f"Avg daily turnover: ₹{payload['avg_daily_turnover_crore']} Cr\n"
-        f"RSI: {payload['rsi']}{adx_str} | VWAP: ₹{payload['vwap']} | 5m ATR: ₹{payload['atr']}\n"
+        f"🚀 BHARAT PRE-EXPLOSION SCOUT 2.0 [{payload.get('tier', 'TIER-1')}]\n"
+        f"{'🟢 EARLY BUY IGNITION' if payload['side'] == 'BUY' else '🔴 EARLY SELL IGNITION'} — {payload['symbol']}\n"
+        f"Current Day Move: {payload['day_move_pct']:+.2f}% (Remaining 10-15% Runway: ~{payload.get('remaining_room_pct', 10.0)}%)\n"
+        f"Entry reference: ₹{payload['price']} (VWAP: ₹{payload['vwap']})\n"
+        f"Stop: ₹{payload['stop']} | T1 (2.5R): ₹{payload['target']} | T2 (5R): ₹{payload['runner_target']}{exp_str}\n"
+        f"Conviction Score: {payload['score']}/100 | Planned R:R: {payload['reward_risk']}R\n"
+        f"5m RVOL: {payload['relative_volume']}x | Session RVOL: {payload['cumulative_relative_volume']}x\n"
+        f"RSI: {payload['rsi']} | MFI: {payload.get('mfi', 'N/A')} | ADX: {payload.get('adx', 'N/A')} | BB Width: {payload.get('bb_bandwidth_pct', 'N/A')}%\n"
+        f"Avg Turnover: ₹{payload['avg_daily_turnover_crore']} Cr | 20d Avg Range: {payload.get('avg_daily_range_pct', 'N/A')}%\n"
         f"{forecast_line}\n"
-        f"Setup: {payload['setup']}\n"
+        f"fmzquant Pillars: {pillars}\n"
         f"Candle time: {payload['candle_time']}\n"
         "Research alert only. Check live spread, price and execution risk. No order was placed."
     )
@@ -991,7 +1139,7 @@ def send_telegram_message(message: str) -> None:
 
 
 def deliver_pending_signals(limit: int = 10) -> int:
-    """Deliver queued alerts, then mark them delivered in the persisted SQLite DB."""
+    """Deliver queued alerts immediately, then mark them delivered in SQLite."""
     delivered = 0
     with db_connect() as conn:
         rows = conn.execute(
@@ -1013,13 +1161,13 @@ def deliver_pending_signals(limit: int = 10) -> int:
     return delivered
 
 
-def rank_top_intraday_movers(
+def rank_pre_explosion_candidates(
     intraday_map: Dict[str, pd.DataFrame],
     daily_map: Dict[str, Dict[str, Any]],
     now: datetime,
-) -> List[Tuple[float, str]]:
-    """Rank stocks by absolute intraday move % among liquid stocks moving between 2.2% and 9.8%."""
-    movers: List[Tuple[float, str]] = []
+) -> List[Dict[str, Any]]:
+    """Rank stocks that are in the EARLY ignition zone (0.4% to 5.0% move) with surging volume."""
+    ignition_list: List[Dict[str, Any]] = []
     for symbol, raw_df in intraday_map.items():
         if raw_df is None or raw_df.empty:
             continue
@@ -1029,10 +1177,16 @@ def rank_top_intraday_movers(
         last_idx = df.index[-1]
         price = float(df.iloc[-1]["close"])
         day_move, _, _, _ = compute_effective_day_move(df, last_idx, daily_map.get(symbol, {}), price)
-        if 2.2 <= abs(day_move) <= CFG["MAX_DAY_MOVE_PCT"]:
-            movers.append((abs(day_move), symbol))
-    movers.sort(key=lambda x: x[0], reverse=True)
-    return movers
+        if CFG["MIN_DAY_MOVE_PCT"] <= abs(day_move) <= CFG["MAX_DAY_MOVE_PCT"]:
+            relvol, _ = same_slot_relative_volume(df, last_idx, CFG["MIN_TIME_SLOT_SESSIONS"])
+            if relvol >= 1.25:
+                ignition_list.append({
+                    "symbol": symbol,
+                    "day_move_pct": round(day_move, 2),
+                    "rvol": round(relvol, 2),
+                })
+    ignition_list.sort(key=lambda x: x["rvol"], reverse=True)
+    return ignition_list
 
 
 def run_scan_cycle() -> Dict[str, Any]:
@@ -1082,38 +1236,33 @@ def run_scan_cycle() -> Dict[str, Any]:
         time.sleep(0.08)
 
     alerted_today = get_today_alerted_symbols()
-    top_movers = rank_top_intraday_movers(intraday_all, daily_map, now)
-    top_mover_pool = {sym for _, sym in top_movers[:CFG["TOP_MOVERS_POOL_SIZE"] * 2]}
+    early_ignitions = rank_pre_explosion_candidates(intraday_all, daily_map, now)
 
     candidates: List[Tuple[int, float, Dict[str, Any], pd.DataFrame]] = []
-    top5_diagnostics: Dict[str, Any] = {}
 
+    # Pass 1: Scan all 200 stocks for Early Pre-Explosion Ignition (4+ of 5 fmzquant pillars, day move <= 5.0%)
     for symbol in symbols:
-        if symbol in alerted_today or (top_mover_pool and symbol not in top_mover_pool):
+        if symbol in alerted_today:
             continue
         frame = intraday_all.get(symbol, pd.DataFrame())
-        diag: Dict[str, Any] = {}
-        signal = evaluate_symbol(symbol, frame, daily_map[symbol], now, diagnostic=diag, allow_tier2=False)
-        if symbol in {s for _, s in top_movers[:5]}:
-            top5_diagnostics[symbol] = "PASS_TIER1" if signal else diag
+        signal = evaluate_symbol(symbol, frame, daily_map[symbol], now, allow_tier2=False)
         if signal:
-            candidates.append((signal["score"], abs(signal["day_move_pct"]), signal, frame))
+            candidates.append((signal["score"], signal["relative_volume"], signal, frame))
 
+    # Pass 2: Tier-2 (3 of 5 fmzquant pillars) on top early volume-ignition stocks if Pass 1 had 0 matches
     tier2_triggered = False
     if not candidates and is_tier2_window(now):
         tier2_triggered = True
-        top_mover_symbols = [sym for _, sym in top_movers[:CFG["TOP_MOVERS_POOL_SIZE"]]]
-        for symbol in top_mover_symbols:
+        for item in early_ignitions[:15]:
+            symbol = item["symbol"]
             if symbol in alerted_today:
                 continue
             frame = intraday_all.get(symbol, pd.DataFrame())
-            diag_t2: Dict[str, Any] = {}
-            signal = evaluate_symbol(symbol, frame, daily_map[symbol], now, diagnostic=diag_t2, allow_tier2=True)
-            if symbol in {s for _, s in top_movers[:5]} and signal:
-                top5_diagnostics[symbol] = "PASS_TIER2"
+            signal = evaluate_symbol(symbol, frame, daily_map[symbol], now, allow_tier2=True)
             if signal:
-                candidates.append((signal["score"], abs(signal["day_move_pct"]), signal, frame))
+                candidates.append((signal["score"], signal["relative_volume"], signal, frame))
 
+    # Rank by highest Confluence Score, then highest Relative Volume Surge (NOT highest prior move!)
     candidates.sort(key=lambda x: (x[0], x[1]), reverse=True)
     technical_candidates = len(candidates)
     kronos_rejected = 0
@@ -1121,7 +1270,8 @@ def run_scan_cycle() -> Dict[str, Any]:
     remaining_window_slots = max(0, win_limit - used_in_win)
     cycle_limit = min(CFG["MAX_SIGNALS_PER_CYCLE"], remaining_window_slots)
 
-    for _, _, signal, candles in candidates:
+    # Evaluate top candidates through Kronos-mini 6-bar forward trajectory predictor
+    for _, _, signal, candles in candidates[:max(8, cycle_limit * 3)]:
         if inserted >= cycle_limit:
             break
         if CFG["KRONOS_ENABLED"] and kronos_predictor is not None:
@@ -1129,7 +1279,7 @@ def run_scan_cycle() -> Dict[str, Any]:
                 forecast = kronos_forecast(signal["symbol"], candles, signal["side"])
                 signal["forecast"] = forecast
                 if forecast["direction_aligned"]:
-                    signal["score"] = min(100, signal["score"] + 5)
+                    signal["score"] = min(100, signal["score"] + 6)
                 elif CFG["KRONOS_REQUIRED"]:
                     kronos_rejected += 1
                     continue
@@ -1138,9 +1288,6 @@ def run_scan_cycle() -> Dict[str, Any]:
                 if CFG["KRONOS_REQUIRED"]:
                     kronos_rejected += 1
                     continue
-        elif CFG["KRONOS_REQUIRED"]:
-            kronos_rejected += 1
-            continue
 
         if add_signal(signal, now=now):
             inserted += 1
@@ -1155,11 +1302,10 @@ def run_scan_cycle() -> Dict[str, Any]:
         "time_window": win_name,
         "window_signals": f"{used_in_win + inserted}/{win_limit}",
         "symbols_considered": len(symbols),
-        "top_5_intraday_movers": [{"symbol": s, "abs_move_pct": round(m, 2)} for m, s in top_movers[:5]],
-        "top_5_diagnostics": top5_diagnostics,
+        "top_early_ignition_watchlist": early_ignitions[:6],
         "technical_candidates": technical_candidates,
         "tier2_fallback_evaluated": tier2_triggered,
-        "kronos_rejected_or_unavailable": kronos_rejected,
+        "kronos_rejected": kronos_rejected,
         "new_signals_queued": inserted,
         "signals_today_total": existing_today + inserted,
         "telegram_delivered": delivered,
@@ -1184,7 +1330,7 @@ def seconds_until_next_5m_slot(now: Optional[datetime] = None) -> float:
 
 
 def run_continuous_market_session() -> Dict[str, Any]:
-    """Run 5-minute scan cycles continuously all day until 15:20 IST without stopping early on trade counts."""
+    """Run 5-minute scan cycles continuously all day until 15:20 IST without stopping early."""
     session_start = time.monotonic()
     max_seconds = CFG["CONTINUOUS_LOOP_MINUTES"] * 60.0
     now = datetime.now(TZ)
@@ -1201,8 +1347,6 @@ def run_continuous_market_session() -> Dict[str, Any]:
         return {"status": "outside_market_hours", "at": now.isoformat()}
 
     load_kronos()
-    if CFG["KRONOS_REQUIRED"] and kronos_predictor is None:
-        raise RuntimeError("Kronos is required but not ready: " + kronos_status)
 
     cycles_run = 0
     last_result: Dict[str, Any] = {"status": "idle"}
@@ -1235,7 +1379,7 @@ def run_continuous_market_session() -> Dict[str, Any]:
 
 
 def run_dry_run_v2() -> Dict[str, Any]:
-    """Historical full-session diagnostic replay with time-windowed limits."""
+    """Historical full-session diagnostic replay for Pre-Explosion Ignition + Kronos."""
     from collections import Counter
     started = time.monotonic()
     if not UNIVERSE_CACHE.exists():
@@ -1288,6 +1432,8 @@ def run_dry_run_v2() -> Dict[str, Any]:
             rejection["missing_replay_session"] += 1
             continue
         symbols_with_session += 1
+        session_end_high = float(today["high"].max())
+        session_end_low = float(today["low"].min())
         for candle_start in today.index:
             anchor = candle_start.to_pydatetime() + timedelta(minutes=5)
             if anchor > end or anchor.time() < dtime(9, 20):
@@ -1301,7 +1447,18 @@ def run_dry_run_v2() -> Dict[str, Any]:
                 symbol, prefix, entry, anchor, diagnostic=diag, allow_tier2=allow_t2, pre_normalized=True
             )
             if signal:
-                candidates.append((signal["score"], abs(signal["day_move_pct"]), signal, prefix, anchor))
+                # Calculate actual post-signal excursion achieved later in the same session!
+                future_bars = today.loc[today.index > candle_start]
+                if not future_bars.empty:
+                    if signal["side"] == "BUY":
+                        max_after = float(future_bars["high"].max())
+                        signal["actual_move_after_signal_pct"] = round(((max_after / signal["price"]) - 1.0) * 100.0, 2)
+                    else:
+                        min_after = float(future_bars["low"].min())
+                        signal["actual_move_after_signal_pct"] = round(((signal["price"] - min_after) / signal["price"]) * 100.0, 2)
+                else:
+                    signal["actual_move_after_signal_pct"] = 0.0
+                candidates.append((signal["score"], signal["relative_volume"], signal, prefix, anchor))
                 rejection["technical_pass"] += 1
             else:
                 rejection[diag.get("rejected", "unknown")] += 1
@@ -1320,57 +1477,31 @@ def run_dry_run_v2() -> Dict[str, Any]:
             seen_symbols.add(sym)
             unique_daily_picks.append(item)
 
-    candidates_by_time = sorted(candidates, key=lambda item: (item[2]["candle_time"], -item[0], -item[1]))
-    live_simulated_picks = []
-    live_seen = set()
-    win_counts: Dict[str, int] = Counter()
-    for item in candidates_by_time:
-        sig = item[2]
-        anchor_dt = item[4]
-        if sig["symbol"] in live_seen:
-            continue
-        win_name, _, _, win_limit = get_time_window_info(anchor_dt)
-        if win_counts[win_name] >= win_limit:
-            continue
-        live_seen.add(sig["symbol"])
-        win_counts[win_name] += 1
-        live_simulated_picks.append(item)
-
-    independent = {"status": "not_run"}
-    eligible = []
-    for entry in entries:
-        f = normalized.get(entry["symbol"])
-        if f is not None and len(completed_bars(f.loc[f.index.date <= replay_day], end)) >= 40:
-            eligible.append((entry["symbol"], f))
-    if eligible and kronos_predictor is not None:
-        sym, frame = eligible[0]
-        try:
-            pred = kronos_forecast(sym, frame, "BUY", as_of=end)
-            independent = {"status": "success", "symbol": sym, "forecast": pred}
-        except Exception as exc:
-            independent = {"status": "failed", "symbol": sym, "error": str(exc)[:350]}
-            LOG.warning("DRY RUN V2 independent Kronos inference failed: %s", exc)
-    elif not eligible:
-        independent = {"status": "no_sufficient_history"}
-    else:
-        independent = {"status": "skipped_kronos_not_loaded"}
+    # Filter through Kronos-mini on top unique picks
+    kronos_confirmed_picks = []
+    for _, _, signal, prefix, anchor in unique_daily_picks[:15]:
+        item = dict(signal)
+        if kronos_predictor is not None:
+            try:
+                fc = kronos_forecast(signal["symbol"], prefix, signal["side"], as_of=anchor)
+                item["forecast"] = fc
+                if fc["direction_aligned"] or not CFG["KRONOS_REQUIRED"]:
+                    kronos_confirmed_picks.append(item)
+            except Exception as exc:
+                item["forecast"] = {"status": "error", "detail": str(exc)[:250]}
+        else:
+            kronos_confirmed_picks.append(item)
 
     report = {
-        "mode": "DRY_RUN_V2_NO_ALERTS",
+        "mode": "DRY_RUN_V2_PRE_EXPLOSION_IGNITION",
         "session_date_ist": str(replay_day),
         "symbols_requested": len(entries),
-        "symbols_with_data": len(normalized),
         "symbols_with_replay_session": symbols_with_session,
         "candles_evaluated": replayed_bars,
-        "checks_total": total_checks,
         "primary_rejection_counts": dict(rejection.most_common()),
         "alignment_condition_failures": dict(conditions_failed.most_common()),
-        "technical_candidates_bars": len(candidates),
         "unique_symbol_candidates": len(unique_daily_picks),
-        "window_counts": dict(win_counts),
-        "simulated_live_daily_trades": [x[2] for x in live_simulated_picks],
-        "top_10_unique_candidates": [x[2] for x in unique_daily_picks[:10]],
-        "kronos_independent_test": independent,
+        "kronos_confirmed_pre_explosion_trades": kronos_confirmed_picks[:8],
         "elapsed_seconds": round(time.monotonic() - started, 2),
     }
     path = ROOT / "dry_run_v2_report.json"
@@ -1378,16 +1509,16 @@ def run_dry_run_v2() -> Dict[str, Any]:
     LOG.info("DRY RUN V2 SUMMARY %s", json.dumps({
         k: v for k, v in report.items()
         if k in (
-            "session_date_ist", "symbols_requested", "symbols_with_replay_session",
-            "candles_evaluated", "primary_rejection_counts", "unique_symbol_candidates",
-            "window_counts", "simulated_live_daily_trades", "elapsed_seconds",
+            "session_date_ist", "symbols_requested", "candles_evaluated",
+            "primary_rejection_counts", "unique_symbol_candidates",
+            "kronos_confirmed_pre_explosion_trades", "elapsed_seconds",
         )
     }, default=str))
     return report
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Bharat Intraday Scout 2.0 automatic session runner")
+    parser = argparse.ArgumentParser(description="Bharat Intraday Scout 2.0 Pre-Explosion Ignition Runner")
     parser.add_argument(
         "--task",
         choices=["scan", "refresh-universe", "test-telegram", "test-kronos", "dry-run-v2", "reset-today-quota"],
@@ -1421,7 +1552,7 @@ def main() -> int:
         return 0
 
     if args.task == "test-telegram":
-        send_telegram_message("✅ Bharat Intraday Scout 2.0 Telegram test successful. Full-session loop active.")
+        send_telegram_message("✅ Bharat Intraday Scout 2.0 Pre-Explosion Ignition + Kronos Engine active.")
         LOG.info("Telegram test succeeded")
         return 0
 

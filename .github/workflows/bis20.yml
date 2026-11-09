@@ -47,6 +47,8 @@ jobs:
       PRICE_FLOOR: '50'
       MIN_AVG_TURNOVER_INR: '50000000'
       INTRADAY_UNIVERSE_SIZE: '200'
+      MIN_DAY_MOVE_PCT: '0.4'
+      MAX_DAY_MOVE_PCT: '5.0'
       LIMIT_BEFORE_10AM: '10'
       LIMIT_10AM_TO_1PM: '10'
       LIMIT_1PM_TO_2PM: '5'
@@ -54,7 +56,9 @@ jobs:
       MAX_SIGNALS_PER_CYCLE: '3'
       CONTINUOUS_LOOP_MINUTES: '350'
       KRONOS_ENABLED: 'true'
-      KRONOS_REQUIRED: 'false'
+      KRONOS_REQUIRED: 'true'
+      KRONOS_PRED_LEN: '6'
+      KRONOS_SAMPLE_COUNT: '3'
     steps:
       - name: Checkout repository
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5

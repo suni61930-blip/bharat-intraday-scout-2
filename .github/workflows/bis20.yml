@@ -5,23 +5,30 @@ on:
     # Weekly NSE equity universe/liquidity refresh: Sunday 08:30 IST = 03:00 UTC.
     - cron: '0 3 * * 0'
     # Dense 5-minute weekday schedule across entire NSE session (08:45 IST to 15:25 IST = 03:15 UTC to 09:55 UTC).
-    # Once any scheduled or manual run starts, it stays alive continuously until 15:20 IST!
     - cron: '15,20,25,30,35,40,45,50,55 3 * * 1-5'
     - cron: '*/5 4-9 * * 1-5'
+    # Daily Post-Market Self-Learning Backtest & Formula Discovery: 15:35 IST = 10:05 UTC.
+    - cron: '5 10 * * 1-5'
   workflow_dispatch:
     inputs:
       task:
-        description: 'Choose a manual task'
+        description: 'Choose a task (backtest-learn reverse-engineers top movers & tunes weights)'
         required: true
         type: choice
         default: scan
         options:
           - scan
+          - backtest-learn
           - reset-today-quota
           - dry-run-v2
           - refresh-universe
           - test-telegram
           - test-kronos
+      target_symbol:
+        description: 'Optional NSE symbol for backtest-learn (e.g. GROWW, CGPOWER; leave blank for Top 10 Day-High Movers)'
+        required: false
+        type: string
+        default: ''
 
 # Prevent two runs from mutating SQLite state or running duplicate loops simultaneously.
 concurrency:
@@ -36,7 +43,6 @@ jobs:
   run-scanner:
     if: github.event_name != 'schedule' || vars.BIS_SCANNER_ENABLED != 'false'
     runs-on: ubuntu-latest
-    # 360 minutes (6 hours) covers the full NSE trading day in a single uninterrupted session!
     timeout-minutes: 360
     env:
       PYTHONUNBUFFERED: '1'
@@ -44,6 +50,8 @@ jobs:
       HF_HUB_DISABLE_PROGRESS_BARS: '1'
       TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
       TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+      TAURIC_API_KEY: ${{ secrets.TAURIC_API_KEY }}
+      TARGET_SYMBOL: ${{ inputs.target_symbol }}
       PRICE_FLOOR: '50'
       MIN_AVG_TURNOVER_INR: '50000000'
       INTRADAY_UNIVERSE_SIZE: '200'
@@ -59,6 +67,8 @@ jobs:
       KRONOS_REQUIRED: 'true'
       KRONOS_PRED_LEN: '6'
       KRONOS_SAMPLE_COUNT: '3'
+      TRADING_R1_ENABLED: 'true'
+      TRADING_R1_REQUIRED: 'false'
     steps:
       - name: Checkout repository
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
@@ -75,6 +85,8 @@ jobs:
         run: |
           if [[ "$EVENT_NAME" == "schedule" && "$SCHEDULE_CRON" == "0 3 * * 0" ]]; then
             TASK="refresh-universe"
+          elif [[ "$EVENT_NAME" == "schedule" && "$SCHEDULE_CRON" == "5 10 * * 1-5" ]]; then
+            TASK="backtest-learn"
           elif [[ "$EVENT_NAME" == "workflow_dispatch" ]]; then
             TASK="${MANUAL_TASK:-scan}"
           else
@@ -125,7 +137,7 @@ jobs:
           fi
 
       - name: Restore Kronos model cache
-        if: steps.task.outputs.skip_outside_hours != 'true' && (steps.task.outputs.name == 'scan' || steps.task.outputs.name == 'test-kronos' || steps.task.outputs.name == 'dry-run-v2')
+        if: steps.task.outputs.skip_outside_hours != 'true' && (steps.task.outputs.name == 'scan' || steps.task.outputs.name == 'test-kronos' || steps.task.outputs.name == 'dry-run-v2' || steps.task.outputs.name == 'backtest-learn')
         id: hf-cache
         uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
         with:
@@ -133,41 +145,46 @@ jobs:
           key: bis20-hf-kronos-mini-tokenizer2k-v1
 
       - name: Clone official Kronos source
-        if: steps.task.outputs.skip_outside_hours != 'true' && (steps.task.outputs.name == 'scan' || steps.task.outputs.name == 'test-kronos' || steps.task.outputs.name == 'dry-run-v2')
+        if: steps.task.outputs.skip_outside_hours != 'true' && (steps.task.outputs.name == 'scan' || steps.task.outputs.name == 'test-kronos' || steps.task.outputs.name == 'dry-run-v2' || steps.task.outputs.name == 'backtest-learn')
         run: |
           rm -rf vendor/Kronos
           git clone --depth 1 https://github.com/shiyu-coder/Kronos.git vendor/Kronos || echo "Warning: Kronos clone failed; running technical strategy."
 
-      - name: Run Bharat Intraday Scout (Full-Day Auto-Looping Session)
+      - name: Run Bharat Intraday Scout (Tri-Engine + Self-Learning Backtester)
         if: steps.task.outputs.skip_outside_hours != 'true'
         env:
           TASK_NAME: ${{ steps.task.outputs.name }}
-        run: .venv/bin/python scanner.py --task "$TASK_NAME"
+          TARGET_SYM: ${{ inputs.target_symbol }}
+        run: .venv/bin/python scanner.py --task "$TASK_NAME" --symbol "$TARGET_SYM"
 
-      - name: Upload dry-run V2 diagnostic report
-        if: always() && steps.task.outputs.name == 'dry-run-v2'
+      - name: Upload diagnostic / backtest-learn report
+        if: always() && (steps.task.outputs.name == 'dry-run-v2' || steps.task.outputs.name == 'backtest-learn')
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: bis20-dry-run-v2-report
-          path: dry_run_v2_report.json
+          name: bis20-backtest-learning-report
+          path: |
+            dry_run_v2_report.json
+            data/learned_strategy_weights.json
           if-no-files-found: warn
-          retention-days: 7
+          retention-days: 14
 
-      - name: Commit scanner state and universe cache
+      - name: Commit scanner state and learned strategy weights
         if: always() && steps.task.outputs.skip_outside_hours != 'true' && steps.task.outputs.name != 'dry-run-v2'
         shell: bash
         run: |
           cp runtime/bis20.sqlite3 /tmp/bis20.sqlite3.bak 2>/dev/null || true
           cp data/liquid_universe.json /tmp/liquid_universe.json.bak 2>/dev/null || true
+          cp data/learned_strategy_weights.json /tmp/learned_strategy_weights.json.bak 2>/dev/null || true
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git fetch origin main || true
           git reset --hard origin/main || true
           cp /tmp/bis20.sqlite3.bak runtime/bis20.sqlite3 2>/dev/null || true
           cp /tmp/liquid_universe.json.bak data/liquid_universe.json 2>/dev/null || true
-          git add runtime/bis20.sqlite3 data/liquid_universe.json 2>/dev/null || true
+          cp /tmp/learned_strategy_weights.json.bak data/learned_strategy_weights.json 2>/dev/null || true
+          git add runtime/bis20.sqlite3 data/liquid_universe.json data/learned_strategy_weights.json 2>/dev/null || true
           if ! git diff --cached --quiet; then
-            git commit -m "BIS 2.0: persist scanner state [skip ci]" || true
+            git commit -m "BIS 2.0: persist scanner state & learned weights [skip ci]" || true
             git push origin HEAD:main || true
           else
             echo "No state/cache changes to commit."

@@ -1317,7 +1317,7 @@ def format_alert_message(payload: Dict[str, Any]) -> str:
     exp_str = f" | 10% Expansion: ₹{payload['expansion_target']}" if payload.get("expansion_target") else ""
 
     return (
-        f"🚀 BHARAT PRE-EXPLOSION SCOUT 2.0 [{payload.get('tier', 'TIER-1')}]\n"
+        f"🚀 RKS PRE-EXPLOSION SCANNER 2.0 [{payload.get('tier', 'TIER-1')}]\n"
         f"{'🟢 EARLY BUY IGNITION' if payload['side'] == 'BUY' else '🔴 EARLY SELL IGNITION'} — {payload['symbol']}\n"
         f"Current Day Move: {payload['day_move_pct']:+.2f}% (Remaining 10-15% Runway: ~{payload.get('remaining_room_pct', 10.0)}%)\n"
         f"Entry reference: ₹{payload['price']} (VWAP: ₹{payload['vwap']})\n"
@@ -1813,7 +1813,7 @@ def run_backtest_and_learn(target_symbol: Optional[str] = None, send_telegram: b
             for k, v in best_formulas[:4]
         ]
         msg = (
-            f"🧠 BHARAT SCOUT 2.0 — SELF-LEARNING BACKTEST ({replay_day})\n"
+            f"🧠 RKS SCAN 2.0 — SELF-LEARNING BACKTEST ({replay_day})\n"
             f"Past Alerts Audit: ✅ {worked_count} Worked | ❌ {failed_count} Failed\n\n"
             f"🔍 Reverse-Engineered Day-High Movers:\n" + "\n".join(top_rev_lines) + "\n\n"
             f"📊 Cross-Validated Formula Rankings (Auto-Saved):\n" + "\n".join(f_lines)
@@ -1891,7 +1891,7 @@ def run_continuous_market_session() -> Dict[str, Any]:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Bharat Intraday Scout 2.0 Tri-Engine + Self-Learning Backtester")
+    parser = argparse.ArgumentParser(description="RKS Intraday Scan 2.0 Tri-Engine + Self-Learning Backtester")
     parser.add_argument(
         "--task",
         choices=["scan", "backtest-learn", "dry-run-v2", "refresh-universe", "test-telegram", "test-kronos", "reset-today-quota"],
@@ -1927,7 +1927,7 @@ def main() -> int:
         return 0
 
     if args.task == "test-telegram":
-        send_telegram_message("✅ Bharat Intraday Scout 2.0 (fmzquant + Kronos + Trading-R1 + Self-Learning Backtester) active.")
+        send_telegram_message("✅ RKS Intraday Scan 2.0 (fmzquant + Kronos + Trading-R1 + Self-Learning Backtester) active.")
         LOG.info("Telegram test succeeded")
         return 0
 
